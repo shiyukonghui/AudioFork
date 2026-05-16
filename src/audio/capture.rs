@@ -1,0 +1,110 @@
+// 音频路由器 — 输入流封装模块
+// 封装 cpal::Stream，提供输入流生命周期管理与暂停/恢复控制
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use cpal::traits::{DeviceTrait, StreamTrait};
+
+use crate::error::AudioRouterError;
+
+/// 输入音频流封装
+///
+/// 封装底层 `cpal::Stream`，提供：
+/// - 构造时绑定设备与配置
+/// - 暂停/恢复/状态查询
+/// - 析构时自动停止流
+pub struct CaptureStream {
+    /// 底层 cpal 输入流
+    stream: cpal::Stream,
+    /// 暂停状态标记（原子变量，支持内部可变性）
+    paused: AtomicBool,
+}
+
+impl CaptureStream {
+    /// 构造新的输入捕获流
+    ///
+    /// # 参数
+    /// * `device` - 输入音频设备引用
+    /// * `config` - 流配置（采样率、通道数、缓冲区大小等）
+    /// * `on_data` - 音频数据回调，每次收到采样数据时被调用。
+    ///   回调参数为 `&[f32]`，采样值范围约在 [-1.0, 1.0]。
+    ///   回调必须实现 `Send + 'static`，因为在独立线程上执行。
+    ///
+    /// # 错误
+    /// 无法从设备创建输入流时返回 `AudioRouterError::StreamError`
+    pub fn new<F>(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        mut on_data: F,
+    ) -> crate::error::Result<Self>
+    where
+        F: FnMut(&[f32]) + Send + 'static,
+    {
+        // 适配 cpal 0.15 的回调签名：FnMut(&[f32], &InputCallbackInfo)
+        // 用闭包包装用户提供的 FnMut(&[f32])，忽略 InputCallbackInfo 参数
+        let data_callback = move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+            on_data(data);
+        };
+
+        let stream = device
+            .build_input_stream(
+                config,
+                data_callback,
+                // 流错误回调：通过 tracing 记录错误信息
+                |err| {
+                    tracing::error!(?err, "捕获流内部错误");
+                },
+                // 超时时间：None 表示使用默认行为（非独占模式下忽略）
+                None,
+            )
+            .map_err(|e: cpal::BuildStreamError| {
+                AudioRouterError::StreamError(e.to_string())
+            })?;
+
+        // 流创建后默认处于播放（非暂停）状态
+        Ok(Self {
+            stream,
+            paused: AtomicBool::new(false),
+        })
+    }
+
+    /// 暂停输入流
+    ///
+    /// 暂停后不再触发 `on_data` 回调，直到调用 `resume()` 恢复。
+    pub fn pause(&self) -> crate::error::Result<()> {
+        self.stream
+            .pause()
+            .map_err(|e: cpal::PauseStreamError| {
+                AudioRouterError::StreamError(e.to_string())
+            })?;
+        self.paused.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// 恢复输入流
+    ///
+    /// 恢复后继续触发 `on_data` 回调接收音频数据。
+    pub fn resume(&self) -> crate::error::Result<()> {
+        self.stream
+            .play()
+            .map_err(|e: cpal::PlayStreamError| {
+                AudioRouterError::StreamError(e.to_string())
+            })?;
+        self.paused.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// 查询当前是否处于暂停状态
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for CaptureStream {
+    /// 析构时 `cpal::Stream` 会自动停止底层音频流，
+    /// 确保资源正确释放，不会产生悬空的音频回调。
+    fn drop(&mut self) {
+        // cpal::Stream 自身的 Drop 实现会调用停止逻辑，
+        // 此处无需额外操作，流随结构体一同析构。
+    }
+}

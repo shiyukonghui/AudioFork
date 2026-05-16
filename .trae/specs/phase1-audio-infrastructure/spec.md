@@ -37,4 +37,62 @@
 - **WHEN** 调用 enumerate_output_devices()
 - **THEN** 返回所有有效输出设备列表，蓝牙/网络设备被标注类型
 
-#### Scenario:
+#### Scenario: 按名称模糊匹配输入设备
+- **WHEN** 指定 `--input-device "Mic"`
+- **THEN** 选中名称包含 "Mic" 的输入设备
+
+#### Scenario: 默认输入设备
+- **WHEN** 未指定 `--input-device`
+- **THEN** 使用系统默认输入设备
+
+#### Scenario: 默认输出设备
+- **WHEN** 未指定 `--output-device`
+- **THEN** 使用全部有效输出设备
+
+### Requirement: CLI 参数骨架
+系统 SHALL 支持需求说明书 2.1 中全部命令行参数，包括互斥校验和配置文件覆盖。
+
+#### Scenario: --gui 与 --monitor 互斥
+- **WHEN** 同时指定 `--gui` 和 `--monitor`
+- **THEN** 拒绝启动并提示错误
+
+#### Scenario: 配置文件加载
+- **WHEN** 指定 `--config <PATH>`
+- **THEN** 加载 TOML 配置文件，命令行参数覆盖配置文件值
+
+#### Scenario: GUI 模式下参数过滤
+- **WHEN** `--gui` 生效
+- **THEN** 仅解析 `--config` 和 `--gui`，其余参数忽略并输出 warn 日志
+
+### Requirement: 同参数单路直通
+系统 SHALL 在输入/输出采样率和声道数相同时，实现一路音频直通播放。
+
+#### Scenario: 同参数直通成功
+- **WHEN** 输入设备 48kHz/立体声，输出设备 48kHz/立体声
+- **THEN** 音频从输入直接拷贝至输出，延迟 < 20ms（共享模式）
+
+#### Scenario: 不同参数拒绝启动
+- **WHEN** 输入 48kHz，输出 44.1kHz
+- **THEN** 拒绝启动并提示"需要重采样能力，将在第三阶段支持"
+
+#### Scenario: Ctrl+C 优雅停止
+- **WHEN** 用户按 Ctrl+C
+- **THEN** 2 秒内干净退出，无残留线程
+
+### Requirement: 统一错误类型
+系统 SHALL 定义 `AudioRouterError` 枚举、`ErrorSeverity` 枚举和 `RecoveryState` 枚举，所有模块使用统一 `Result<T, AudioRouterError>`。
+
+#### Scenario: 设备未找到错误
+- **WHEN** 指定不存在的设备名
+- **THEN** 返回 `AudioRouterError::DeviceNotFound` 并包含清晰错误消息
+
+#### Scenario: 配置错误
+- **WHEN** 配置文件格式错误
+- **THEN** 返回 `AudioRouterError::ConfigError` 并包含具体原因
+
+### Requirement: 配置文件结构
+系统 SHALL 支持 TOML 配置文件，包含 `gui_enabled` 字段控制默认启动模式。
+
+#### Scenario: 配置文件包含 gui_enabled
+- **WHEN** 配置文件设置 `gui_enabled = true`
+- **THEN** 默认启动 GUI 模式
