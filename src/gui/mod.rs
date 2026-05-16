@@ -49,6 +49,8 @@ pub struct AudioRouterApp {
     show_logs: bool,
     /// panic hook 是否已设置（确保只设置一次）
     panic_hook_set: bool,
+    /// 中文字体是否已加载（确保只加载一次）
+    font_loaded: bool,
 }
 
 impl AudioRouterApp {
@@ -112,6 +114,7 @@ impl AudioRouterApp {
             config_path,
             show_logs: true,
             panic_hook_set: false,
+            font_loaded: false,
         }
     }
 }
@@ -151,6 +154,14 @@ impl eframe::App for AudioRouterApp {
                     .set_buttons(rfd::MessageButtons::Ok)
                     .show();
             }));
+        }
+
+        // ====================================================================
+        // (a.2) 首次加载中文字体，解决默认字体不包含 CJK 字形的问题
+        // ====================================================================
+        if !self.font_loaded {
+            self.font_loaded = true;
+            load_chinese_font(ctx);
         }
 
         // ====================================================================
@@ -462,6 +473,60 @@ pub fn run_gui(config_path: Option<String>) -> crate::error::Result<()> {
 // ============================================================================
 // 内部辅助函数
 // ============================================================================
+
+/// 加载系统中文字体并注册到 egui 字体系统
+///
+/// 按优先级尝试多个系统中文字体路径：
+/// - Windows: Microsoft YaHei (微软雅黑) → SimHei (黑体)
+/// - macOS: PingFang (苹方)
+/// - Linux: Noto Sans CJK
+///
+/// 找到第一个可读取的字体后即停止搜索，并将其设置为最高优先级的
+/// 等宽比例字体族，使中文、日文、韩文等 CJK 字符正确渲染。
+fn load_chinese_font(ctx: &egui::Context) {
+    // 系统中文字体的候选路径列表（按优先级排序）
+    let font_paths = [
+        // Windows
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        // macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        // Linux
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    ];
+
+    for path in &font_paths {
+        match std::fs::read(path) {
+            Ok(data) => {
+                let mut fonts = egui::FontDefinitions::default();
+
+                // 将系统中文字体注册为 "chinese" 字体
+                fonts
+                    .font_data
+                    .insert("chinese".to_owned(), egui::FontData::from_owned(data).into());
+
+                // 将中文字体插入到 Proportional 和 Monospace 字体族的最前面，
+                // 作为首选回退字体：egui 先尝试默认字体，找不到的字符用此字体渲染
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                    fonts
+                        .families
+                        .entry(family)
+                        .or_default()
+                        .insert(0, "chinese".to_owned());
+                }
+
+                ctx.set_fonts(fonts);
+                tracing::info!("已加载中文字体: {}", path);
+                return;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    tracing::warn!("未找到系统中文字体，中文可能显示为口字形");
+}
 
 /// 生成当前时间的格式化字符串 "HH:MM:SS"
 ///
