@@ -66,6 +66,10 @@ pub struct CliArgs {
     #[arg(long = "wasapi-exclusive", default_value_t = false)]
     pub wasapi_exclusive: bool,
 
+    /// 禁用砖墙限幅器，允许削波（默认启用限幅器）
+    #[arg(long = "no-limiter", default_value_t = false)]
+    pub no_limiter: bool,
+
     /// 启动图形用户界面模式，与 --monitor 互斥
     #[arg(long = "gui", default_value_t = false, conflicts_with = "monitor")]
     pub gui: bool,
@@ -112,6 +116,8 @@ pub struct ResolvedConfig {
     /// 是否启用 WASAPI 独占模式（仅当 wasapi-exclusive feature 启用时可用）
     #[cfg(feature = "wasapi-exclusive")]
     pub wasapi_exclusive: bool,
+    /// 是否禁用砖墙限幅器
+    pub no_limiter: bool,
     /// 是否启动图形界面模式
     pub gui: bool,
     /// 配置文件路径，None 表示未指定
@@ -218,6 +224,13 @@ impl CliArgs {
                 config.wasapi_exclusive
             },
 
+            // 限幅器：CLI 为 true 则覆盖，否则用配置文件值
+            no_limiter: if self.no_limiter {
+                true
+            } else {
+                config.no_limiter
+            },
+
             // 图形界面模式：CLI 标志优先
             gui: if self.gui {
                 true
@@ -287,6 +300,9 @@ impl CliArgs {
         if self.monitor {
             tracing::warn!("GUI 模式下 --monitor 参数被忽略，GUI 模式与监控模式互斥");
         }
+        if self.no_limiter {
+            tracing::warn!("GUI 模式下 --no-limiter 参数被忽略，请通过配置文件或 GUI 界面设置");
+        }
 
         // 构建过滤后的 CliArgs，仅保留 config 和 gui
         Self {
@@ -304,6 +320,7 @@ impl CliArgs {
             monitor: false,
             #[cfg(feature = "wasapi-exclusive")]
             wasapi_exclusive: false,
+            no_limiter: false,
             gui: self.gui,
             config: self.config.clone(),
             preset: None,

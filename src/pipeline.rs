@@ -6,7 +6,7 @@
 
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use ringbuf::traits::{Consumer as _, Observer as _, Producer as _};
 
@@ -283,19 +283,24 @@ pub fn create_input_callback(
 // (F) 输出回调
 // ============================================================================
 
-/// 创建输出回调闭包
+/// 创建输出回调闭包（Phase 3：集成重采样器、砖墙限幅器、漂移补偿、输入丢失标志）
 ///
-/// 从环形缓冲区消费音频数据，经过声道映射和淡入淡出处理后写入输出设备。
+/// 从环形缓冲区消费音频数据，经过声道映射、限幅、重采样和淡入淡出处理后写入输出设备。
 ///
 /// # 参数
-/// * `consumer` — 环形缓冲区的消费者端（独占所有权）
-/// * `fader` — 淡入淡出处理器共享引用
-/// * `channel_mapper` — 声道映射器共享引用
-/// * `input_channels` — 输入音频流的声道数
-/// * `output_channels` — 输出音频流的声道数
-/// * `input_sample_rate` — 输入采样率
-/// * `output_sample_rate` — 输出采样率
-/// * `underrun_counter` — 欠载计数器（用于监控/诊断）
+/// * `consumer`              — 环形缓冲区的消费者端（独占所有权）
+/// * `fader`                 — 淡入淡出处理器共享引用
+/// * `channel_mapper`        — 声道映射器共享引用
+/// * `input_channels`        — 输入音频流的声道数
+/// * `output_channels`       — 输出音频流的声道数
+/// * `input_sample_rate`     — 输入采样率
+/// * `output_sample_rate`    — 输出采样率
+/// * `underrun_counter`      — 欠载计数器（用于监控/诊断）
+/// * `resampler`             — 重采样处理器（Mutex 包装，线程安全）
+/// * `limiter`               — 砖墙限幅器（Mutex 包装，线程安全）
+/// * `delta_var`             — 时钟漂移补偿微调量（原子读取，+1/-1/0）
+/// * `input_lost`            — 输入设备丢失标志（原子读取）
+/// * `no_drift_compensation` — 是否禁用漂移补偿（true = 禁用）
 pub fn create_output_callback(
     mut consumer: RbConsumer,
     fader: Arc<Fader>,
@@ -305,15 +310,31 @@ pub fn create_output_callback(
     input_sample_rate: u32,
     output_sample_rate: u32,
     underrun_counter: Arc<AtomicU64>,
+    // ===== Phase 3 新增参数 =====
+    resampler: Arc<Mutex<crate::resample::ResampleProcessor>>,
+    limiter: Arc<Mutex<crate::limiter::BrickwallLimiter>>,
+    delta_var: Arc<AtomicI32>,
+    input_lost: Arc<AtomicBool>,
+    no_drift_compensation: bool,
 ) -> impl FnMut(&mut [f32]) + Send + 'static {
     let ich = input_channels as usize;
     let och = output_channels as usize;
+
+    // Phase 3 直通条件：采样率相同 + 声道数相同 + 漂移补偿禁用
     let is_passthrough = input_sample_rate == output_sample_rate
-        && input_channels == output_channels;
+        && input_channels == output_channels
+        && no_drift_compensation;
+
+    // 最小转换路径：采样率和声道相同，但启用了漂移补偿
+    // 仅做帧数微调（delta），不经过声道映射和重采样
+    let is_minimal_convert = input_sample_rate == output_sample_rate
+        && input_channels == output_channels
+        && !no_drift_compensation;
 
     // 预分配临时缓冲区，避免音频回调中堆分配
-    // 按最大预期帧数（4096）分配，覆盖绝大多数音频缓冲区大小
-    let max_tmp_samples = 4096 * ich;
+    // 按最大预期帧数（4096）和最大声道数分配，覆盖绝大多数音频缓冲区大小
+    let max_channels = ich.max(och);
+    let max_tmp_samples = 4096 * max_channels;
     let mut tmp_buf: Vec<f32> = vec![0.0f32; max_tmp_samples];
 
     move |output: &mut [f32]| {
@@ -322,50 +343,160 @@ pub fn create_output_callback(
             return;
         }
 
-        // 计算需要的输入采样数
-        // 直通模式：帧数相同
-        // 转换模式：按声道比计算（简化处理，不支持采样率转换）
-        let n_in_target = if is_passthrough {
-            output_frames
-        } else {
-            // 声道数不同时按比例计算需要的输入帧数
-            (output_frames * ich) / och
-        };
-
-        let needed_samples = n_in_target * ich;
-
-        // 确保临时缓冲区足够大
-        if tmp_buf.len() < needed_samples {
-            // 仅在缓冲区不足时才扩容（正常运行时不会进入此分支）
-            tmp_buf.resize(needed_samples, 0.0);
+        // ---- a) 检查输入丢失标志 ----
+        if input_lost.load(Ordering::Acquire) {
+            // 输入设备已丢失 → 输出静音，启动淡出
+            for sample in output.iter_mut() {
+                *sample = 0.0;
+            }
+            fader.start_fade_out();
+            fader.process(output, output_channels);
+            return;
         }
 
-        // 检查消费者端数据是否充足
-        let occupied = consumer.occupied_len();
-        if occupied >= needed_samples {
-            // ---- 数据充足 ----
-            if is_passthrough {
-                // 直通模式：直接拷贝到输出缓冲区
+        // ---- 读取漂移补偿 delta ----
+        let delta = delta_var.load(Ordering::Acquire);
+
+        // ================================================================
+        // 路径 1：直通模式（采样率==声道都相同，且无漂移补偿）
+        // ================================================================
+        if is_passthrough {
+            let needed_samples = output_frames * ich;
+
+            if consumer.occupied_len() >= needed_samples {
                 let pop_count = consumer.pop_slice(output);
                 debug_assert_eq!(pop_count, needed_samples);
             } else {
-                // 转换模式：先读到临时缓冲区，再经过声道映射写入输出
-                let pop_count = consumer.pop_slice(&mut tmp_buf[..needed_samples]);
-                debug_assert_eq!(pop_count, needed_samples);
-                channel_mapper.map(&tmp_buf[..needed_samples], output);
+                consumer.clear();
+                fader.start_fade_out();
+                underrun_counter.fetch_add(1, Ordering::Relaxed);
+                for sample in output.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+            fader.process(output, output_channels);
+            return;
+        }
+
+        // ================================================================
+        // 路径 2：最小转换路径（采样率和声道相同，但启用了漂移补偿）
+        // 仅做帧数微调，不经过声道映射和重采样
+        // ================================================================
+        if is_minimal_convert {
+            let n_target = (output_frames as isize + delta as isize).max(0) as usize;
+            let needed = n_target * ich;
+
+            // 确保临时缓冲区足够大
+            if tmp_buf.len() < needed {
+                tmp_buf.resize(needed, 0.0);
+            }
+
+            if consumer.occupied_len() >= needed {
+                // 从 SPSC 读取 n_target 帧到临时缓冲区
+                let pop_count = consumer.pop_slice(&mut tmp_buf[..needed]);
+                debug_assert_eq!(pop_count, needed);
+
+                // 应用限幅器
+                if let Ok(mut lim) = limiter.lock() {
+                    lim.process(&mut tmp_buf[..needed], output_channels);
+                }
+
+                // 写入输出缓冲区：取 output_frames 帧，丢弃多余或填充静音
+                let copy_samples = output_frames * och;
+                let src_samples = n_target * ich;
+                let copy = copy_samples.min(src_samples);
+                output[..copy].copy_from_slice(&tmp_buf[..copy]);
+                for s in &mut output[copy..] {
+                    *s = 0.0;
+                }
+            } else {
+                consumer.clear();
+                fader.start_fade_out();
+                underrun_counter.fetch_add(1, Ordering::Relaxed);
+                for sample in output.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+            fader.process(output, output_channels);
+            return;
+        }
+
+        // ================================================================
+        // 路径 3：完整转换路径
+        // 统一流程：SPSC 读取 → [声道映射] → 限幅 → 重采样 → 输出
+        // ================================================================
+
+        // 获取重采样器需要的输入帧数
+        let resampler_input_frames = if let Ok(ref resampler) = resampler.lock() {
+            resampler.input_frames_next()
+        } else {
+            output_frames // 回退：假设需要与输出相同的帧数
+        };
+
+        // 计算需要从 SPSC 读取的输入帧数（含 delta 微调）
+        let n_in = resampler_input_frames.max(1) + delta.max(0) as usize;
+        let needed_samples = n_in * ich;
+
+        // 确保临时缓冲区足够大（考虑重采样器额外需求 + 声道映射后的可能扩增）
+        let max_possible = needed_samples.max(n_in * och);
+        if tmp_buf.len() < max_possible {
+            tmp_buf.resize(max_possible, 0.0);
+        }
+
+        if consumer.occupied_len() >= needed_samples {
+            // ---- 步骤 1：从 SPSC 读取数据到临时缓冲区 ----
+            let pop_count = consumer.pop_slice(&mut tmp_buf[..needed_samples]);
+            debug_assert_eq!(pop_count, needed_samples);
+
+            // ---- 步骤 2：声道映射（如需要）----
+            // need_mapping 表示输入/输出声道数不同，需要经过 ChannelMapper 转换
+            let need_mapping = !channel_mapper.is_passthrough();
+
+            // 跟踪当前待处理的数据范围（样本数）和声道数
+            // processed_samples / processed_channels 在步骤 2 后确定
+            let (processed_samples, processed_channels) = if need_mapping {
+                let mapped_len = n_in * och;
+                // 创建映射缓冲区并执行声道映射
+                let mut mapped_buf = vec![0.0f32; mapped_len];
+                channel_mapper.map(&tmp_buf[..needed_samples], &mut mapped_buf);
+                // 将映射结果写回临时缓冲区
+                tmp_buf[..mapped_len].copy_from_slice(&mapped_buf);
+                (mapped_len, output_channels)
+            } else {
+                (needed_samples, input_channels)
+            };
+
+            // ---- 步骤 3：砖墙限幅 ----
+            if let Ok(mut lim) = limiter.lock() {
+                lim.process(&mut tmp_buf[..processed_samples], processed_channels);
+            }
+
+            // ---- 步骤 4：重采样 ----
+            if let Ok(mut resampler) = resampler.lock() {
+                let out_samples = output.len();
+                let (_consumed, produced) = resampler
+                    .process(&tmp_buf[..processed_samples], output)
+                    .unwrap_or((0, 0));
+                // 若重采样产出不足，剩余部分填静音
+                let produced_samples = produced * och;
+                for s in &mut output[produced_samples.min(out_samples)..] {
+                    *s = 0.0;
+                }
+            } else {
+                // 无法获取重采样器锁 → 输出静音
+                for s in output.iter_mut() {
+                    *s = 0.0;
+                }
             }
         } else {
-            // ---- 数据不足（欠载）----
-            // 清空消费者端残余数据
+            // ---- 欠载处理 ----
             consumer.clear();
-
-            // 启动淡出，使欠载过渡平滑
+            // 重置重采样器内部状态，避免残留数据污染后续处理
+            if let Ok(mut resampler) = resampler.lock() {
+                resampler.reset();
+            }
             fader.start_fade_out();
-
-            // 记录欠载事件
             underrun_counter.fetch_add(1, Ordering::Relaxed);
-
-            // 输出填充静音
             for sample in output.iter_mut() {
                 *sample = 0.0;
             }

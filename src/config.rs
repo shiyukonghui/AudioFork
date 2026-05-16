@@ -34,6 +34,8 @@ pub struct AudioRouterConfig {
     pub monitor: bool,
     /// 是否启用 WASAPI 独占模式（仅 Windows）
     pub wasapi_exclusive: bool,
+    /// 是否禁用砖墙限幅器，默认 false（即默认启用限幅器）
+    pub no_limiter: bool,
     /// 是否启用 GUI 图形界面模式
     pub gui_enabled: bool,
 }
@@ -58,6 +60,7 @@ impl Default for AudioRouterConfig {
             exit_on_input_loss: false,
             monitor: false,
             wasapi_exclusive: false,
+            no_limiter: false,
             gui_enabled: false,
             // input_fallback_to_default 默认启用降级
             input_fallback_to_default: true,

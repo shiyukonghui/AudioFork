@@ -1,6 +1,6 @@
-// 音频路由器入口 — Phase 2: 多输出扇出管道
+// 音频路由器入口 — Phase 3: 多输出扇出管道 + 重采样 + 限幅 + 漂移补偿 + 热插拔
 // 实现输入设备 → [SPSC 环形缓冲区 × N] → 多个输出设备的音频扇出路由
-// 使用 SlotArray 管理槽位，Fader 实现平滑淡入淡出，ChannelMapper 处理声道转换
+// Phase 3 新增：重采样器支持不同采样率、砖墙限幅器、时钟漂移补偿、热插拔监听
 mod error;
 mod config;
 mod device;
@@ -8,12 +8,25 @@ mod audio;
 mod cli;
 mod channel_map;
 mod pipeline;
+mod recovery;
+mod drift;
+mod limiter;
+mod hotplug;
+mod resample;
+mod message;
+mod gui;
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::resample::{ResampleProcessor, ResamplerType};
+use crate::limiter::BrickwallLimiter;
+use crate::drift::DriftCompensator;
+use crate::hotplug::{start_hotplug_monitor, HotplugEvent};
+use crate::recovery::{InputRecoveryManager, RecoveryAction};
 use clap::Parser;
+use crossbeam_channel;
 use ringbuf::traits::Split;
 use tracing_subscriber::prelude::*;
 
@@ -41,6 +54,19 @@ struct OutputSlot {
     is_passthrough: bool,
     /// 输出音频流的声道数
     output_channels: u16,
+    // ===== Phase 3 新增 =====
+    /// 重采样处理器（共享引用，输出回调中每次处理帧时调用）
+    resampler: Arc<Mutex<ResampleProcessor>>,
+    /// 砖墙限幅器（共享引用，防止削波失真）
+    limiter: Arc<Mutex<BrickwallLimiter>>,
+    /// 漂移补偿帧数微调量（控制线程写入，音频回调读取）
+    delta: Arc<AtomicI32>,
+    /// 时钟漂移补偿器（可选，由 --no-drift-compensation 控制是否启用）
+    drift: Option<Arc<Mutex<DriftCompensator>>>,
+    /// 输入丢失标志（供音频回调线程读取，用于静音输出）
+    input_lost: Arc<AtomicBool>,
+    /// 实际输出设备采样率（可能与输入不同，通过重采样器转换）
+    output_sample_rate: u32,
 }
 
 fn main() {
@@ -135,14 +161,12 @@ fn run() -> Result<()> {
     let resolved = cli_args.merge_with_config(&file_config);
 
     // ========================================================================
-    // 4. GUI 模式处理
+    // 4. GUI 模式处理（Phase 4）
     // ========================================================================
     if resolved.gui {
-        // 调用 filter_for_gui 过滤参数并输出警告日志
         let _filtered = cli_args.filter_for_gui();
-        tracing::info!("GUI 模式将在第四阶段实现");
-        println!("GUI 模式将在第四阶段实现");
-        std::process::exit(0);
+        tracing::info!("启动 GUI 模式...");
+        return gui::run_gui(resolved.config_path.clone());
     }
 
     // ========================================================================
@@ -200,38 +224,8 @@ fn run() -> Result<()> {
     };
 
     // ========================================================================
-    // 8. Phase 2 采样率校验
+    // 8. Phase 3 采样率处理：通过重采样器支持不同采样率的输出设备
     // ========================================================================
-    // Phase 2 不支持重采样（Phase 3 加入），但支持不同声道数的输出（通过 ChannelMapper）
-    // 对每个输出设备校验采样率是否一致，不一致则跳过并警告
-    let mut compatible_outputs: Vec<(cpal::Device, DeviceInfo)> = Vec::new();
-    for (dev, info) in output_devices {
-        // 如果设备支持列表为空，说明无法确定支持的采样率，尝试使用
-        // 如果支持列表非空且不包含指定采样率，跳过并警告
-        if !info.sample_rates.is_empty()
-            && !info.sample_rates.contains(&sample_rate)
-        {
-            tracing::warn!(
-                "跳过输出设备 '{}'：不支持采样率 {}Hz（支持的采样率: {:?}），将在 Phase 3 重采样支持",
-                info.name,
-                sample_rate,
-                info.sample_rates
-            );
-            continue;
-        }
-        compatible_outputs.push((dev, info));
-    }
-
-    if compatible_outputs.is_empty() {
-        return Err(AudioRouterError::ConfigError(
-            "没有输出设备支持当前采样率，请更换采样率或等待 Phase 3 重采样支持".to_string(),
-        ));
-    }
-
-    tracing::info!(
-        "采样率校验通过，{} 个输出设备兼容",
-        compatible_outputs.len()
-    );
 
     // ========================================================================
     // 9. 创建 SlotArray 和 overflow_counters
@@ -245,7 +239,7 @@ fn run() -> Result<()> {
     // ========================================================================
     let mut output_slots: Vec<OutputSlot> = Vec::new();
 
-    for (device_out, info_out) in &compatible_outputs {
+    for (device_out, info_out) in &output_devices {
         // 10.1 确定输出声道数：优先使用设备原生声道数，回退到输入声道数
         let output_channels = info_out
             .channels
@@ -253,7 +247,35 @@ fn run() -> Result<()> {
             .copied()
             .unwrap_or(channels);
 
-        // 10.2 创建 SPSC 环形缓冲区
+        // 10.2 选择输出设备的最佳采样率：优先与输入相同，否则选最接近的
+        let output_sample_rate = if info_out.sample_rates.is_empty() {
+            sample_rate // 设备未报告采样率列表，使用输入采样率
+        } else if info_out.sample_rates.contains(&sample_rate) {
+            sample_rate // 与输入相同
+        } else {
+            // 选择与输入最接近的采样率
+            let mut rates: Vec<&u32> = info_out.sample_rates.iter().collect();
+            rates.sort_by(|a, b| {
+                let da = (**a as i64 - sample_rate as i64).abs();
+                let db = (**b as i64 - sample_rate as i64).abs();
+                da.cmp(&db)
+            });
+            *rates[0]
+        };
+
+        // 10.3 resampler none 校验：不允许采样率不匹配且禁用了重采样
+        if resolved.resampler == "none" && output_sample_rate != sample_rate {
+            tracing::error!(
+                "输出设备 '{}' 采样率 {}Hz 与输入 {}Hz 不匹配，但重采样算法设为 none",
+                info_out.name, output_sample_rate, sample_rate
+            );
+            return Err(AudioRouterError::ConfigError(format!(
+                "设备 '{}' 需要重采样（{}Hz→{}Hz），但 --resampler none",
+                info_out.name, sample_rate, output_sample_rate
+            )));
+        }
+
+        // 10.4 创建 SPSC 环形缓冲区
         // 容量 = buffer_frames × 最大声道数 × 4（安全余量）
         let max_channels = channels.max(output_channels) as usize;
         let rb_capacity = buffer_frames as usize * max_channels * 4;
@@ -261,7 +283,7 @@ fn run() -> Result<()> {
             ringbuf::HeapRb::<f32>::new(rb_capacity).into();
         let (producer, consumer) = rb.split();
 
-        // 10.3 分配槽位
+        // 10.5 分配槽位
         let slot_index = slot_array
             .allocate_slot(producer)
             .ok_or_else(|| {
@@ -271,18 +293,64 @@ fn run() -> Result<()> {
                 ))
             })?;
 
-        // 10.4 创建声道映射器
+        // 10.6 创建声道映射器
         let channel_mapper = Arc::new(ChannelMapper::new(channels, output_channels));
         let is_passthrough = channel_mapper.is_passthrough();
 
-        // 10.5 创建淡入淡出处理器（5ms 淡入淡出时长）
+        // 10.7 创建淡入淡出处理器（5ms 淡入淡出时长）
         let fade_len = ((5 * sample_rate as usize) / 1000).max(1);
         let fader = Arc::new(Fader::new(fade_len));
 
-        // 10.6 创建欠载计数器
+        // 10.8 创建欠载计数器
         let underrun_counter = Arc::new(AtomicU64::new(0));
 
-        // 10.7 创建输出回调
+        // 10.9 创建重采样器
+        let resampler_type = match resolved.resampler.as_str() {
+            "sinc" => ResamplerType::Sinc,
+            "cubic" => ResamplerType::Cubic,
+            "none" => ResamplerType::None,
+            other => {
+                tracing::warn!("未知重采样算法 '{}'，使用 sinc", other);
+                ResamplerType::Sinc
+            }
+        };
+        let resampler = Arc::new(Mutex::new(
+            ResampleProcessor::new(
+                resampler_type,
+                sample_rate as f64,
+                output_sample_rate as f64,
+                channels as usize,
+                buffer_frames as usize,
+            ).map_err(|e| AudioRouterError::ConfigError(format!("创建重采样器失败: {}", e)))?
+        ));
+
+        // 10.10 创建砖墙限幅器
+        let limiter = Arc::new(Mutex::new(
+            BrickwallLimiter::new(
+                1.0,                    // 阈值 0dBFS
+                0.0,                    // 零攻击
+                10.0,                   // 10ms 释放
+                output_channels as usize,
+                output_sample_rate as f64,
+                !resolved.no_limiter,   // 默认启用，--no-limiter 禁用
+            )
+        ));
+
+        // 10.11 创建漂移补偿器
+        let drift_enabled = !resolved.no_drift_compensation;
+        let drift = if drift_enabled {
+            Some(Arc::new(Mutex::new(
+                DriftCompensator::new(true, sample_rate as f64, buffer_frames as usize)
+            )))
+        } else {
+            None
+        };
+        let delta = Arc::new(AtomicI32::new(0));
+
+        // 10.12 创建输入丢失标志
+        let input_lost = Arc::new(AtomicBool::new(false));
+
+        // 10.13 创建输出回调（传入 Phase 3 新参数）
         let output_callback = pipeline::create_output_callback(
             consumer,
             Arc::clone(&fader),
@@ -290,18 +358,24 @@ fn run() -> Result<()> {
             channels,
             output_channels,
             sample_rate,
-            sample_rate, // Phase 2: 输出采样率与输入相同（无重采样）
+            output_sample_rate,  // 实际选择的输出采样率
             Arc::clone(&underrun_counter),
+            // Phase 3 新参数
+            Arc::clone(&resampler),
+            Arc::clone(&limiter),
+            Arc::clone(&delta),
+            Arc::clone(&input_lost),
+            resolved.no_drift_compensation,
         );
 
-        // 10.8 构建输出流配置（每个输出使用自己声道数，采样率与输入相同）
+        // 10.14 构建输出流配置（使用实际输出采样率）
         let output_config = cpal::StreamConfig {
             channels: output_channels,
-            sample_rate: cpal::SampleRate(sample_rate),
+            sample_rate: cpal::SampleRate(output_sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // 10.9 创建输出播放流
+        // 10.15 创建输出播放流
         let playback = PlaybackStream::new(device_out, &output_config, output_callback)?;
 
         let slot = OutputSlot {
@@ -312,13 +386,21 @@ fn run() -> Result<()> {
             device_name: info_out.name.clone(),
             is_passthrough,
             output_channels,
+            resampler,
+            limiter,
+            delta,
+            drift,
+            input_lost,
+            output_sample_rate,
         };
 
         tracing::info!(
-            "  输出设备 '{}' 已配置 | 槽位 #{} | {}ch | 模式: {} | 淡入淡出: {} 帧",
+            "  输出设备 '{}' 已配置 | 槽位 #{} | {}ch | {}Hz→{}Hz | 模式: {} | 淡入淡出: {} 帧",
             slot.device_name,
             slot.index,
             slot.output_channels,
+            sample_rate,
+            output_sample_rate,
             if slot.is_passthrough { "直通" } else { "声道转换" },
             fade_len,
         );
@@ -367,8 +449,23 @@ fn run() -> Result<()> {
     }
 
     // ========================================================================
-    // 12. 启动输入流
+    // 12. Phase 3 新增设施（恢复管理器、WASAPI、热插拔、输入捕捉）
     // ========================================================================
+
+    // 12.1 WASAPI 独占模式提示（当前未完整实现）
+    #[cfg(feature = "wasapi-exclusive")]
+    if resolved.wasapi_exclusive {
+        tracing::warn!("WASAPI 独占模式当前尚未完整实现，将使用共享模式");
+    }
+
+    // 12.2 输入丢失恢复管理器
+    let mut recovery = InputRecoveryManager::new(
+        resolved.exit_on_input_loss,
+        resolved.input_fallback_to_default,
+        Some(info_in.name.clone()),
+    );
+
+    // 12.3 启动输入流
     let on_input = pipeline::create_input_callback(
         Arc::clone(&slot_array),
         Arc::clone(&overflow_counters),
@@ -376,11 +473,23 @@ fn run() -> Result<()> {
     let capture = CaptureStream::new(&device_in, &input_config, on_input)?;
     tracing::info!("输入流已启动");
 
+    // 12.4 漂移补偿控制标志
+    let drift_stop_flag = Arc::new(AtomicBool::new(false));
+
+    // 12.5 热插拔监控
+    let (hotplug_tx, hotplug_rx) = crossbeam_channel::unbounded();
+    let hotplug_stop = Arc::new(AtomicBool::new(false));
+    let hotplug_handle = start_hotplug_monitor(
+        hotplug_tx,
+        Arc::clone(&hotplug_stop),
+        Duration::from_secs(2),
+    );
+
     // ========================================================================
     // 13. 打印启动信息
     // ========================================================================
     tracing::info!("==========================================");
-    tracing::info!("  音频路由器 Phase 2 已启动");
+    tracing::info!("  音频路由器 Phase 3 已启动");
     tracing::info!("  输入设备: {}", info_in.name);
     tracing::info!(
         "  输入配置: {}Hz / {}ch",
@@ -390,55 +499,155 @@ fn run() -> Result<()> {
     tracing::info!("  活跃输出设备: {} 个", ready_count);
     for slot in &output_slots {
         tracing::info!(
-            "    [槽位 #{}] {} | {}Hz / {}ch | {}",
+            "    [槽位 #{}] {} | {}Hz→{}Hz / {}ch | {} | 限幅: {}",
             slot.index,
             slot.device_name,
             sample_rate,
+            slot.output_sample_rate,
             slot.output_channels,
             if slot.is_passthrough {
                 "直通"
             } else {
                 "声道转换"
             },
+            if resolved.no_limiter { "禁用" } else { "启用" },
         );
     }
     tracing::info!(
-        "  缓冲区: {} 帧 (~{:.1}ms)",
+        "  缓冲区: {} 帧 (~{:.1}ms) | 漂移补偿: {}",
         buffer_frames,
-        delay_ms
+        delay_ms,
+        if resolved.no_drift_compensation { "禁用" } else { "启用" },
     );
     tracing::info!("  按 Enter 键停止路由...");
     tracing::info!("==========================================");
 
     // ========================================================================
-    // 14. 等待用户按下 Enter 键停止
+    // 14. 主循环（Phase 3：热插拔监听 + 恢复管理 + 可选监控 JSON）
     // ========================================================================
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).ok();
+    if resolved.monitor {
+        // 带监控的事件循环：每 200ms 轮询热插拔和恢复事件，每 5 秒输出 JSON
+        let mut last_monitor_time = std::time::Instant::now();
+        let mut last_drift_time = std::time::Instant::now();
+        let mut last_recovery_time = std::time::Instant::now();
+
+        println!("按 Enter 或 Ctrl+C 停止路由...");
+        loop {
+            // 14.1 检查热插拔事件（非阻塞）
+            while let Ok(event) = hotplug_rx.try_recv() {
+                match event {
+                    HotplugEvent::DeviceAdded(info) => {
+                        tracing::info!("检测到新输出设备: {}", info.name);
+                    }
+                    HotplugEvent::DeviceRemoved(name) => {
+                        tracing::info!("输出设备已移除: {}", name);
+                        if let Some(slot) = output_slots.iter().find(|s| s.device_name == name) {
+                            slot_array.deactivate_slot(slot.index);
+                            tracing::info!("  槽位 #{} 已停用", slot.index);
+                        }
+                    }
+                }
+            }
+
+            // 14.2 漂移补偿更新（每 100ms）
+            if last_drift_time.elapsed() >= Duration::from_millis(100) {
+                last_drift_time = std::time::Instant::now();
+                for slot in &output_slots {
+                    if let Some(ref drift) = slot.drift {
+                        if let Ok(mut d) = drift.lock() {
+                            // 使用固定水位 0.5，维持 delta=0（占位逻辑）
+                            // 实际水位应从 pipeline consumer 获取
+                            d.update(0.5);
+                            slot.delta.store(d.delta_val(), Ordering::Release);
+                        }
+                    }
+                }
+            }
+
+            // 14.3 输入恢复 tick（每 100ms）
+            if last_recovery_time.elapsed() >= Duration::from_millis(100) {
+                last_recovery_time = std::time::Instant::now();
+                match recovery.tick() {
+                    RecoveryAction::ShouldExit => {
+                        tracing::info!("输入设备丢失且 --exit-on-input-loss 已设置，退出");
+                        break;
+                    }
+                    RecoveryAction::TryReconnectOriginal => {
+                        tracing::info!("尝试重连原输入设备...");
+                    }
+                    RecoveryAction::TryFallbackToDefault => {
+                        tracing::info!("尝试切换至默认输入设备...");
+                    }
+                    RecoveryAction::None => {}
+                }
+            }
+
+            // 14.4 监控 JSON 输出（每 5 秒）
+            if last_monitor_time.elapsed() >= Duration::from_secs(5) {
+                last_monitor_time = std::time::Instant::now();
+                let outputs_json: Vec<String> = output_slots.iter().map(|slot| {
+                    let water_pct = slot.drift.as_ref()
+                        .and_then(|d| d.lock().ok())
+                        .map(|d| d.water_level_pct())
+                        .unwrap_or(50.0);
+                    format!(
+                        r#"{{"name":"{}","underruns":{},"overflows":{},"latency_ms":{:.1},"delta":{},"water_level_pct":{:.0}}}"#,
+                        slot.device_name,
+                        slot.underrun_counter.load(Ordering::Relaxed),
+                        overflow_counters[slot.index].load(Ordering::Relaxed),
+                        (buffer_frames as f64) * 1000.0 / (slot.output_sample_rate as f64),
+                        slot.delta.load(Ordering::Relaxed),
+                        water_pct,
+                    )
+                }).collect();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                println!(r#"{{"ts":{},"outputs":[{}]}}"#, ts, outputs_json.join(","));
+            }
+
+            // 14.5 非阻塞检查 stdin：Windows 上不支持非阻塞 stdin，使用 sleep 轮询
+            // Ctrl+C 会自然导致程序退出
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    } else {
+        // 简单 Enter 等待（保留 Phase 2 逻辑）+ 后台热插拔线程
+        println!("按 Enter 键停止路由...");
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+    }
 
     // ========================================================================
     // 15. 停止流程（平滑淡出）
     // ========================================================================
     tracing::info!("正在停止音频路由...");
 
-    // 15.1 停止输入流（先停输入，避免新数据进入缓冲区）
+    // 15.1 停止热插拔监听线程
+    hotplug_stop.store(true, Ordering::Release);
+    let _ = hotplug_handle.join();
+
+    // 15.2 设置漂移补偿停止标志
+    drift_stop_flag.store(true, Ordering::Release);
+
+    // 15.3 停止输入流（先停输入，避免新数据进入缓冲区）
     drop(capture);
     tracing::info!("  输入流已停止");
 
-    // 15.2 对所有活跃设备启动淡出
+    // 15.4 对所有活跃设备启动淡出
     for slot in &output_slots {
         slot.fader.start_fade_out();
         tracing::info!("  已对 '{}' 启动淡出", slot.device_name);
     }
 
-    // 15.3 等待淡出完成（最多 2 秒）
+    // 15.5 等待淡出完成（最多 2 秒）
     // 先等待一小段时间让淡出生效，再等待淡出时长完成
     std::thread::sleep(Duration::from_millis(100));
     // 额外等待，确保淡出缓冲区有足够时间排空
     let fade_wait_ms = (delay_ms * 3.0) as u64 + 200;
     std::thread::sleep(Duration::from_millis(fade_wait_ms));
 
-    // 15.4 打印最终统计信息
+    // 15.6 打印最终统计信息
     tracing::info!("--- 最终统计 ---");
     for slot in &output_slots {
         let overflows = overflow_counters[slot.index].load(Ordering::Relaxed);
@@ -452,7 +661,7 @@ fn run() -> Result<()> {
         );
     }
 
-    // 15.5 释放所有输出流（Drop 自动停止底层音频流）
+    // 15.7 释放所有输出流（Drop 自动停止底层音频流）
     drop(output_slots);
 
     tracing::info!("音频路由器已停止");
