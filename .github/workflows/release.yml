@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+# 声明工作流所需的权限
+permissions:
+  contents: write  # 创建 release 需要写权限
+
 env:
   CARGO_TERM_COLOR: always
 
