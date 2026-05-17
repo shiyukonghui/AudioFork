@@ -15,7 +15,7 @@ use crate::error::{AudioRouterError, Result};
 use crate::hotplug::{start_hotplug_monitor, HotplugEvent};
 use crate::limiter::BrickwallLimiter;
 use crate::message::{EngineConfig, EngineToGui, GuiToEngine, OutputSnapshot};
-use crate::pipeline::{Fader, SlotArray, MAX_OUTPUTS};
+use crate::pipeline::{Fader, SlotArray};
 use crate::recovery::{InputRecoveryManager, RecoveryAction};
 use crate::resample::{ResampleProcessor, ResamplerType};
 use crate::source::SourceType;
@@ -112,6 +112,14 @@ fn run_pipeline(
     gui_tx: &Sender<EngineToGui>,
     gui_rx: &Receiver<GuiToEngine>,
 ) -> Result<Vec<OutputSnapshot>> {
+    // 校验 max_outputs 至少为 1，否则管道无法正常工作
+    if config.max_outputs < 1 {
+        return Err(AudioRouterError::ConfigError(format!(
+            "max_outputs 必须 ≥ 1，当前值为 {}",
+            config.max_outputs
+        )));
+    }
+
     // ========================================================================
     // 1. 枚举并记录设备
     // ========================================================================
@@ -172,11 +180,14 @@ fn run_pipeline(
     };
 
     // ========================================================================
-    // 4. 创建 SlotArray 和 overflow_counters
+    // 4. 创建 SlotArray 和 overflow_counters（使用配置中的 max_outputs）
     // ========================================================================
-    let slot_array = Arc::new(SlotArray::new());
-    let overflow_counters: Arc<[AtomicU64; MAX_OUTPUTS]> =
-        Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
+    // 动态创建槽位数组，大小由配置决定
+    let slot_array = Arc::new(SlotArray::new(config.max_outputs));
+    // 动态创建溢出计数器数组（大小与 max_outputs 一致）
+    let overflow_counters: Arc<[AtomicU64]> = (0..config.max_outputs)
+        .map(|_| AtomicU64::new(0))
+        .collect();
 
     // ========================================================================
     // 5. 为每个输出设备创建管道
@@ -223,9 +234,10 @@ fn run_pipeline(
         let slot_index = slot_array
             .allocate_slot(producer)
             .ok_or_else(|| {
+                // 槽位分配失败，已达到配置的最大槽位数限制
                 AudioRouterError::Fatal(format!(
                     "无法为输出设备 '{}' 分配槽位：已达到最大槽位数 {}",
-                    info_out.name, MAX_OUTPUTS
+                    info_out.name, config.max_outputs
                 ))
             })?;
 

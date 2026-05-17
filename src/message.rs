@@ -84,6 +84,8 @@ pub struct EngineConfig {
     pub source_type: String,
     /// 回环捕获设备名称，None 表示使用默认回环设备
     pub loopback_device: Option<String>,
+    /// 最大输出设备数量限制
+    pub max_outputs: usize,
 }
 
 impl Default for EngineConfig {
@@ -102,6 +104,7 @@ impl Default for EngineConfig {
             no_limiter: false,
             source_type: "input".to_string(),
             loopback_device: None,
+            max_outputs: 32,
         }
     }
 }

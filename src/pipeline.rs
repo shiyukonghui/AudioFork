@@ -20,7 +20,9 @@ type RbConsumer = ringbuf::CachingCons<Arc<ringbuf::HeapRb<f32>>>;
 // (A) 常量
 // ============================================================================
 
-/// 最大输出设备数（槽位数量上限）
+/// 最大输出设备数默认值（槽位数量上限）
+/// 保留作为默认值，实际值由配置决定
+#[allow(dead_code)]
 pub const MAX_OUTPUTS: usize = 32;
 
 // ============================================================================
@@ -42,23 +44,29 @@ pub struct Slot {
 // 但通过 UnsafeCell + SPSC 独占写入保证，我们可以安全地标记为 Sync。
 unsafe impl Sync for Slot {}
 
-/// SPSC 槽位数组，管理最多 MAX_OUTPUTS 个输出连接
+/// SPSC 槽位数组，管理最多 max_outputs 个输出连接
 pub struct SlotArray {
     /// 固定长度的槽位列表，使用 Vec 简化初始化
     slots: Vec<Slot>,
+    /// 最大输出设备数（槽位数量上限），保留供未来扩展使用
+    #[allow(dead_code)]
+    max_outputs: usize,
 }
 
 impl SlotArray {
-    /// 创建包含 MAX_OUTPUTS 个空槽位的槽位数组
-    pub fn new() -> Self {
-        let mut slots = Vec::with_capacity(MAX_OUTPUTS);
-        for _ in 0..MAX_OUTPUTS {
+    /// 创建包含 max_outputs 个空槽位的槽位数组
+    ///
+    /// # 参数
+    /// * `max_outputs` — 最大输出设备数（槽位数量上限）
+    pub fn new(max_outputs: usize) -> Self {
+        let mut slots = Vec::with_capacity(max_outputs);
+        for _ in 0..max_outputs {
             slots.push(Slot {
                 producer: UnsafeCell::new(None),
                 active: AtomicBool::new(false),
             });
         }
-        Self { slots }
+        Self { slots, max_outputs }
     }
 
     /// 分配一个空闲槽位，将 Producer 填入其中
@@ -245,10 +253,10 @@ impl Fader {
 ///
 /// # 参数
 /// * `slot_array` — 槽位数组的共享引用
-/// * `overflow_counters` — 各槽位的溢出计数器（用于监控/诊断）
+/// * `overflow_counters` — 各槽位的溢出计数器（动态大小，由调用方传入）
 pub fn create_input_callback(
     slot_array: Arc<SlotArray>,
-    overflow_counters: Arc<[AtomicU64; MAX_OUTPUTS]>,
+    overflow_counters: Arc<[AtomicU64]>,
 ) -> impl FnMut(&[f32]) + Send + 'static {
     move |data: &[f32]| {
         if data.is_empty() {

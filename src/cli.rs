@@ -89,6 +89,10 @@ pub struct CliArgs {
     /// 预设配置文件路径，从指定 TOML 文件导入预设配置
     #[arg(long = "preset")]
     pub preset: Option<String>,
+
+    /// 最大输出设备数量（槽位上限），默认 32
+    #[arg(long = "max-outputs")]
+    pub max_outputs: Option<u32>,
 }
 
 /// 最终解析后的运行配置
@@ -138,6 +142,8 @@ pub struct ResolvedConfig {
     /// 预设配置路径，None 表示未导入预设
     #[allow(dead_code)]
     pub preset_path: Option<String>,
+    /// 最大输出设备数量限制，默认 32
+    pub max_outputs: u32,
 }
 
 impl CliArgs {
@@ -161,6 +167,7 @@ impl CliArgs {
             || self.source_type != "input"
             || self.loopback_device.is_some()
             || self.preset.is_some()
+            || self.max_outputs.is_some()
         // 排除 --config（meta 参数）、--log-file（正交参数）、--gui（GUI 标识）
     }
 
@@ -300,6 +307,12 @@ impl CliArgs {
 
             // 预设配置路径：CLI 优先
             preset_path: self.preset.clone(),
+
+            // 最大输出设备数：CLI 优先，配置文件次之，默认 32
+            max_outputs: self
+                .max_outputs
+                .or(Some(config.max_outputs))
+                .unwrap_or(32),
         }
     }
 
@@ -350,6 +363,9 @@ impl CliArgs {
         if self.loopback_device.is_some() {
             tracing::warn!("GUI 模式下 --loopback-device 参数被忽略，请通过配置文件或 GUI 界面设置");
         }
+        if self.max_outputs.is_some() {
+            tracing::warn!("GUI 模式下 --max-outputs 参数被忽略，请通过配置文件或 GUI 界面设置");
+        }
 
         // 对于 bool 标志：仅当被用户显式设置为 true 时才告警
         if self.no_drift_compensation {
@@ -390,6 +406,7 @@ impl CliArgs {
             source_type: "input".to_string(),
             loopback_device: None,
             preset: None,
+            max_outputs: None,
         }
     }
 }

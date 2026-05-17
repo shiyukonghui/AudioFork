@@ -36,7 +36,7 @@ use crate::audio::{CaptureStream, PlaybackStream};
 use crate::channel_map::ChannelMapper;
 use crate::device::DeviceInfo;
 use crate::error::{AudioRouterError, Result};
-use crate::pipeline::{Fader, SlotArray, MAX_OUTPUTS};
+use crate::pipeline::{Fader, SlotArray};
 
 // ============================================================================
 // 输出槽位：将播放流及其元数据捆绑在一起，便于统一管理生命周期
@@ -282,9 +282,12 @@ fn run(cli_args: cli::CliArgs) -> Result<()> {
     // ========================================================================
     // 9. 创建 SlotArray 和 overflow_counters
     // ========================================================================
-    let slot_array = Arc::new(SlotArray::new());
-    let overflow_counters: Arc<[AtomicU64; MAX_OUTPUTS]> =
-        Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
+    // 使用配置中的 max_outputs 创建槽位数组（替代硬编码的 MAX_OUTPUTS）
+    let slot_array = Arc::new(SlotArray::new(resolved.max_outputs as usize));
+    // 动态创建溢出计数器数组（大小与 max_outputs 一致）
+    let overflow_counters: Arc<[AtomicU64]> = (0..resolved.max_outputs as usize)
+        .map(|_| AtomicU64::new(0))
+        .collect();
 
     // ========================================================================
     // 10. 为每个输出设备分配槽位并创建输出流
@@ -341,7 +344,7 @@ fn run(cli_args: cli::CliArgs) -> Result<()> {
             .ok_or_else(|| {
                 AudioRouterError::Fatal(format!(
                     "无法为输出设备 '{}' 分配槽位：已达到最大槽位数 {}",
-                    info_out.name, MAX_OUTPUTS
+                    info_out.name, resolved.max_outputs
                 ))
             })?;
 

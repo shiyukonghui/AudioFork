@@ -42,6 +42,8 @@ pub struct AudioRouterConfig {
     pub source_type: String,
     /// 回环设备名称，None 表示不使用回环
     pub loopback_device: Option<String>,
+    /// 最大输出设备数量，默认 32
+    pub max_outputs: u32,
 }
 
 impl Default for AudioRouterConfig {
@@ -70,6 +72,8 @@ impl Default for AudioRouterConfig {
             loopback_device: None,
             // input_fallback_to_default 默认启用降级
             input_fallback_to_default: true,
+            // 最大输出设备数量默认为 32
+            max_outputs: 32,
         }
     }
 }

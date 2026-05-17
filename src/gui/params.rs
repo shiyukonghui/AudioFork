@@ -28,6 +28,8 @@ pub struct ParamsPanelState {
     pub source_type: String,
     /// 回环捕获设备名称，None 表示使用默认回环设备
     pub loopback_device: Option<String>,
+    /// 最大输出设备数量限制
+    pub max_outputs: usize,
     /// 引擎是否正在运行（运行中锁定参数编辑）
     pub engine_running: bool,
 }
@@ -49,6 +51,7 @@ impl ParamsPanelState {
             no_limiter: false,
             source_type: "input".to_string(),
             loopback_device: None,
+            max_outputs: 32,
             engine_running: false,
         }
     }
@@ -73,6 +76,7 @@ impl ParamsPanelState {
         self.no_limiter = config.no_limiter;
         self.source_type = config.source_type.clone();
         self.loopback_device = config.loopback_device.clone();
+        self.max_outputs = config.max_outputs;
     }
 
     /// 根据面板当前状态构建 EngineConfig
@@ -104,6 +108,7 @@ impl ParamsPanelState {
             no_limiter: self.no_limiter,
             source_type: self.source_type.clone(),
             loopback_device: self.loopback_device.clone(),
+            max_outputs: self.max_outputs,
         }
     }
 
@@ -197,6 +202,16 @@ impl ParamsPanelState {
                     "WASAPI 独占模式（Windows）",
                 );
             }
+
+            // 最大输出设备数
+            ui.horizontal(|ui| {
+                ui.label("最大输出设备数");
+                ui.add(
+                    egui::DragValue::new(&mut self.max_outputs)
+                        .range(1..=u32::MAX as usize)
+                        .speed(1),
+                );
+            });
 
             // ==================== 输入设备丢失行为 ====================
             ui.heading("输入设备丢失行为");

@@ -97,6 +97,7 @@ impl AudioRouterApp {
             wasapi_exclusive: file_config.wasapi_exclusive,
             source_type: file_config.source_type.clone(),
             loopback_device: file_config.loopback_device.clone(),
+            max_outputs: file_config.max_outputs as usize,
         };
         let mut params = params::ParamsPanelState::new();
         params.load_from_config(&engine_cfg);
@@ -300,6 +301,7 @@ impl eframe::App for AudioRouterApp {
                                         wasapi_exclusive: cfg.wasapi_exclusive,
                                         source_type: cfg.source_type.clone(),
                                         loopback_device: cfg.loopback_device.clone(),
+                                        max_outputs: cfg.max_outputs as usize,
                                     };
                                     self.params.load_from_config(&engine_cfg);
                                     // 设置设备面板的源类型
@@ -355,6 +357,8 @@ impl eframe::App for AudioRouterApp {
                                 wasapi_exclusive: config.wasapi_exclusive,
                                 source_type: config.source_type.clone(),
                                 loopback_device: config.loopback_device.clone(),
+                                // 导出最大输出数量配置
+                                max_outputs: config.max_outputs as u32,
                                 ..AudioRouterConfig::default()
                             };
                             match crate::config::save_config(&file_cfg, &path) {
