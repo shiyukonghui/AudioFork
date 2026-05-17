@@ -53,43 +53,49 @@ pub fn spawn_engine(
         // 发送就绪消息给 GUI，确认引擎线程已启动
         let _ = gui_tx.send(EngineToGui::Ready);
 
-        // 阻塞等待第一条 Start 消息
-        match gui_rx.recv() {
-            Ok(GuiToEngine::Start(config)) => {
-                tracing::info!("引擎线程收到启动指令");
-                // 使用 catch_unwind 捕获 panic，防止引擎线程静默崩溃
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_pipeline(config, &gui_tx, &gui_rx)
-                }));
-                match result {
-                    Ok(Ok(stats)) => {
-                        let _ = gui_tx.send(EngineToGui::Stopped { stats });
+        // 循环处理启动/停止消息，支持多次启停
+        loop {
+            // 阻塞等待 Start 消息
+            match gui_rx.recv() {
+                Ok(GuiToEngine::Start(config)) => {
+                    tracing::info!("引擎线程收到启动指令");
+                    // 使用 catch_unwind 捕获 panic，防止引擎线程静默崩溃
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run_pipeline(config, &gui_tx, &gui_rx)
+                    }));
+                    match result {
+                        Ok(Ok(stats)) => {
+                            let _ = gui_tx.send(EngineToGui::Stopped { stats });
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!("引擎运行错误: {}", e);
+                            let _ = gui_tx.send(EngineToGui::Error(e.to_string()));
+                        }
+                        Err(panic_info) => {
+                            // 捕获到 panic，发送错误消息给 GUI
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                format!("引擎线程 panic: {}", s)
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                format!("引擎线程 panic: {}", s)
+                            } else {
+                                "引擎线程发生未知 panic".to_string()
+                            };
+                            tracing::error!("{}", msg);
+                            let _ = gui_tx.send(EngineToGui::Error(msg));
+                        }
                     }
-                    Ok(Err(e)) => {
-                        tracing::error!("引擎运行错误: {}", e);
-                        let _ = gui_tx.send(EngineToGui::Error(e.to_string()));
-                    }
-                    Err(panic_info) => {
-                        // 捕获到 panic，发送错误消息给 GUI
-                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                            format!("引擎线程 panic: {}", s)
-                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                            format!("引擎线程 panic: {}", s)
-                        } else {
-                            "引擎线程发生未知 panic".to_string()
-                        };
-                        tracing::error!("{}", msg);
-                        let _ = gui_tx.send(EngineToGui::Error(msg));
-                    }
+                    // 运行结束后继续循环，等待下一次启动
+                    tracing::info!("引擎后台线程等待下一次启动指令...");
                 }
-            }
-            Ok(GuiToEngine::Stop) => {
-                // 引擎尚未启动，忽略 Stop
-                tracing::debug!("引擎线程在启动前收到 Stop，已忽略");
-            }
-            Err(_) => {
-                // 通道已关闭（GUI 退出）
-                tracing::debug!("GUI 通道已关闭，引擎线程退出");
+                Ok(GuiToEngine::Stop) => {
+                    // 引擎尚未启动，忽略 Stop
+                    tracing::debug!("引擎线程在启动前收到 Stop，已忽略");
+                }
+                Err(_) => {
+                    // 通道已关闭（GUI 退出）
+                    tracing::debug!("GUI 通道已关闭，引擎线程退出");
+                    break;
+                }
             }
         }
 

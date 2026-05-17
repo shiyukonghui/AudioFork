@@ -82,6 +82,7 @@ impl DevicesPanelState {
     /// - 调用 `crate::device::enumerate_input_devices()` 填充输入设备列表
     /// - 调用 `crate::device::enumerate_output_devices()` 填充输出设备列表
     /// - 首次刷新时（输出设备列表为空），默认勾选所有输出设备
+    /// - 当处于 Loopback 模式时，自动从输出设备列表中排除选中的回采设备
     /// - 枚举失败时返回 `Err(String)` 描述具体错误原因
     pub fn refresh_devices(&mut self) -> Result<(), String> {
         // 枚举输入设备并转为 DeviceInfoSnapshot 快照
@@ -95,7 +96,34 @@ impl DevicesPanelState {
 
         // 记录是否为首次刷新（输出设备列表为空表示首次）
         let is_first_refresh = self.output_devices.is_empty();
-        self.output_devices = outputs.iter().map(|info| info.into()).collect();
+
+        // 当处于 Loopback 模式且已选择回采设备时，自动排除回采设备
+        // 避免同一设备同时作为回采源和输出目标，防止音频反馈环路
+        let loopback_name = if self.source_type == "loopback" && !self.selected_loopback_device.is_empty() {
+            Some(self.selected_loopback_device.to_lowercase())
+        } else {
+            None
+        };
+
+        self.output_devices = outputs
+            .iter()
+            .map(|info| info.into())
+            .filter(|snapshot: &DeviceInfoSnapshot| {
+                // 过滤掉与回采设备同名的输出设备（不区分大小写匹配）
+                if let Some(ref lb_name) = loopback_name {
+                    if snapshot.name.to_lowercase().contains(lb_name.as_str())
+                       || lb_name.contains(&snapshot.name.to_lowercase())
+                    {
+                        tracing::info!(
+                            "输出设备 '{}' 与回采设备 '{}' 重名，已自动排除",
+                            snapshot.name, self.selected_loopback_device
+                        );
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
 
         // 首次刷新时默认勾选所有输出设备
         if is_first_refresh {

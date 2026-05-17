@@ -403,10 +403,40 @@ impl eframe::App for AudioRouterApp {
                         }
                     }
                     devices::DevicesPanelAction::SourceTypeChanged(source_type) => {
-                        self.devices.source_type = source_type;
+                        self.devices.source_type = source_type.clone();
+                        // 当切换到 Loopback 模式时，刷新设备列表以排除回采设备
+                        if source_type == "loopback" {
+                            if let Err(e) = self.devices.refresh_devices() {
+                                self.log_panel
+                                    .push(chrono_now(), format!("刷新设备失败: {}", e));
+                            }
+                        }
                     }
                     devices::DevicesPanelAction::LoopbackDeviceSelected(name) => {
-                        self.devices.selected_loopback_device = name;
+                        self.devices.selected_loopback_device = name.clone();
+                        // 当用户选择回采设备时，自动从已勾选的输出设备集合中移除该设备
+                        // 防止同一设备同时作为回采源和输出目标
+                        if !name.is_empty() {
+                            // 使用模糊匹配移除（不区分大小写）
+                            let lb_name_lower = name.to_lowercase();
+                            self.devices.selected_output_devices.retain(|dev_name| {
+                                let dev_lower = dev_name.to_lowercase();
+                                if dev_lower.contains(&lb_name_lower) || lb_name_lower.contains(&dev_lower) {
+                                    tracing::info!(
+                                        "已从输出设备勾选列表中移除 '{}'（与回采设备 '{}' 重名）",
+                                        dev_name, name
+                                    );
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                        }
+                        // 刷新设备列表，确保输出设备列表中排除回采设备
+                        if let Err(e) = self.devices.refresh_devices() {
+                            self.log_panel
+                                .push(chrono_now(), format!("刷新设备失败: {}", e));
+                        }
                     }
                     devices::DevicesPanelAction::None => {}
                 }
