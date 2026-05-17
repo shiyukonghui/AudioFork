@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: 构建 Release 版本
+        run: cargo build --release
+
+      - name: 打包发布文件
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $exe_name = "audio_router.exe"
+          $archive_name = "audio_router-${tag}-x86_64-pc-windows-msvc.zip"
+
+          # 复制 exe 和配套文件到临时目录
+          mkdir staging
+          copy target\release\$exe_name staging\
+          copy README.md staging\
+          copy LICENSE staging\
+
+          # 打包为 zip
+          Compress-Archive -Path staging\* -DestinationPath $archive_name
+
+          echo "archive_name=$archive_name" >> $env:GITHUB_ENV
+
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.archive_name }}
+          generate_release_notes: true
