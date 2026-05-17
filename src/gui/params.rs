@@ -107,9 +107,34 @@ impl ParamsPanelState {
         }
     }
 
+    /// 在弹窗中渲染参数配置面板
+    ///
+    /// # 参数
+    /// * `ctx` - egui 上下文引用
+    /// * `show` - 控制弹窗显示状态的布尔引用
+    pub fn show_window(&mut self, ctx: &egui::Context, show: &mut bool) {
+        if !*show {
+            return;
+        }
+
+        egui::Window::new("引擎设置")
+            .open(show)
+            .default_size([380.0, 500.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                self.render_params(ui);
+            });
+    }
+
     /// 渲染参数配置面板 UI
     /// 使用 egui::ScrollArea 包裹，分段显示音频参数、重采样、高级选项和输入丢失行为
+    #[allow(dead_code)]
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.render_params(ui);
+    }
+
+    /// 内部渲染方法：绘制所有参数控件
+    fn render_params(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             // 引擎运行时禁用所有控件编辑
             ui.add_enabled_ui(!self.engine_running, |ui| {

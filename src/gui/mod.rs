@@ -442,23 +442,13 @@ impl eframe::App for AudioRouterApp {
                 }
             });
 
-        // ---------- 右侧参数配置面板 ----------
-        egui::SidePanel::right("params")
-            .default_width(300.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                self.params.show(ui);
-            });
-
-        // ---------- 中央区域（最小化，状态信息通过工具栏状态环弹窗显示） ----------
-        // 原底部状态栏已移除，引擎状态通过工具栏红绿环点击弹窗查看
-        egui::CentralPanel::default().show(ctx, |_ui| {
-            // 中央区域保持最小，不显示任何内容
-        });
+        // ---------- 中央区域（不显示任何内容） ----------
+        egui::CentralPanel::default().show(ctx, |_ui| {});
 
         // ====================================================================
-        // (e) 渲染弹窗（日志、状态）
+        // (e) 渲染弹窗（日志、状态、设置）
         // ====================================================================
+        self.params.show_window(ctx, &mut self.toolbar.show_settings_window);
         self.log_panel.show_window(ctx, &mut self.toolbar.show_log_window);
         self.toolbar.show_status_window(ctx, &self.status_bar);
 

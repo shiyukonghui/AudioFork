@@ -1,5 +1,5 @@
 // 顶部工具栏面板 — 引擎状态指示与控制操作
-// 包含：红绿状态环（可点击弹窗）、启动/停止按钮、日志按钮、导入/导出配置
+// 包含：红绿状态环（可点击弹窗）、启动/停止按钮、日志按钮、设置按钮、导入/导出配置
 
 use crate::gui::status::{EngineStatus, StatusBarState};
 use egui::{Color32, Ui, Vec2};
@@ -32,6 +32,8 @@ pub struct ToolbarState {
     pub show_log_window: bool,
     /// 是否显示状态弹窗
     pub show_status_window: bool,
+    /// 是否显示设置弹窗
+    pub show_settings_window: bool,
 }
 
 impl ToolbarState {
@@ -44,6 +46,7 @@ impl ToolbarState {
             config_path: None,
             show_log_window: false,
             show_status_window: false,
+            show_settings_window: false,
         }
     }
 
@@ -131,6 +134,16 @@ impl ToolbarState {
                     egui::RichText::new("\u{1F4CB} 日志").size(15.0),
                 ).clicked() {
                     self.show_log_window = true;
+                }
+
+                // 分隔间距
+                ui.add_space(8.0);
+
+                // ======================== 设置按钮 ========================
+                if ui.button(
+                    egui::RichText::new("\u{2699} 设置").size(15.0),
+                ).clicked() {
+                    self.show_settings_window = true;
                 }
 
                 // 弹性空间，将右侧按钮推到最右
