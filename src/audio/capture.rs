@@ -63,6 +63,13 @@ impl CaptureStream {
                 AudioRouterError::StreamError(e.to_string())
             })?;
 
+        // 启动音频输入流（cpal 创建的流默认处于暂停状态，必须调用 play() 才能触发回调）
+        stream
+            .play()
+            .map_err(|e: cpal::PlayStreamError| {
+                AudioRouterError::StreamError(format!("无法启动捕获流: {}", e))
+            })?;
+
         // 流创建后默认处于播放（非暂停）状态
         Ok(Self {
             stream,
@@ -130,6 +137,17 @@ impl CaptureStream {
                     e
                 ))
             })?;
+
+        // 启动音频输入流（cpal 创建的流默认处于暂停状态，必须调用 play() 才能触发回调）
+        stream
+            .play()
+            .map_err(|e: cpal::PlayStreamError| {
+                crate::error::AudioRouterError::StreamError(format!(
+                    "无法启动 Loopback 捕获流: {}",
+                    e
+                ))
+            })?;
+
         Ok(Self {
             stream,
             paused: std::sync::atomic::AtomicBool::new(false),

@@ -50,17 +50,36 @@ pub fn spawn_engine(
     std::thread::spawn(move || {
         tracing::info!("引擎后台线程已启动，等待 GUI 指令...");
 
+        // 发送就绪消息给 GUI，确认引擎线程已启动
+        let _ = gui_tx.send(EngineToGui::Ready);
+
         // 阻塞等待第一条 Start 消息
         match gui_rx.recv() {
             Ok(GuiToEngine::Start(config)) => {
                 tracing::info!("引擎线程收到启动指令");
-                let result = run_pipeline(config, &gui_tx, &gui_rx);
+                // 使用 catch_unwind 捕获 panic，防止引擎线程静默崩溃
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_pipeline(config, &gui_tx, &gui_rx)
+                }));
                 match result {
-                    Ok(stats) => {
+                    Ok(Ok(stats)) => {
                         let _ = gui_tx.send(EngineToGui::Stopped { stats });
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
+                        tracing::error!("引擎运行错误: {}", e);
                         let _ = gui_tx.send(EngineToGui::Error(e.to_string()));
+                    }
+                    Err(panic_info) => {
+                        // 捕获到 panic，发送错误消息给 GUI
+                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            format!("引擎线程 panic: {}", s)
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            format!("引擎线程 panic: {}", s)
+                        } else {
+                            "引擎线程发生未知 panic".to_string()
+                        };
+                        tracing::error!("{}", msg);
+                        let _ = gui_tx.send(EngineToGui::Error(msg));
                     }
                 }
             }
@@ -122,7 +141,14 @@ fn run_pipeline(
     // ========================================================================
     let buffer_frames = config.buffer_frames;
     let sample_rate = config.sample_rate;
-    let channels = 2u16;
+    // 从设备信息中获取首选声道数，默认回退到 2 声道
+    let channels = info_source
+        .channels
+        .first()
+        .copied()
+        .unwrap_or(2);
+
+    tracing::info!("输入声道数: {}", channels);
 
     let delay_ms = (buffer_frames as f64) * 1000.0 / (sample_rate as f64);
     if delay_ms > config.max_latency_ms as f64 {

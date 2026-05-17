@@ -179,6 +179,10 @@ impl eframe::App for AudioRouterApp {
         // ====================================================================
         while let Ok(msg) = self.engine_rx.try_recv() {
             match msg {
+                EngineToGui::Ready => {
+                    self.log_panel
+                        .push(chrono_now(), "引擎线程已就绪".to_string());
+                }
                 EngineToGui::Started => {
                     self.engine_running = true;
                     self.toolbar.engine_running = true;
@@ -232,27 +236,43 @@ impl eframe::App for AudioRouterApp {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             match self.toolbar.show(ui) {
                 toolbar::ToolbarAction::Start => {
-                    // 从参数面板和设备面板收集配置，构建引擎配置
-                    let mut config = self.params.build_engine_config(
-                        if self.devices.selected_input_device.is_empty() {
+                    // 检查是否选择了输出设备
+                    if self.devices.selected_output_devices.is_empty() {
+                        self.log_panel.push(
+                            chrono_now(),
+                            "错误: 请至少选择一个输出设备".to_string(),
+                        );
+                        self.status_bar.engine_status =
+                            status::EngineStatus::Error("未选择输出设备".to_string());
+                    } else {
+                        // 从参数面板和设备面板收集配置，构建引擎配置
+                        tracing::info!(
+                            "用户点击启动按钮，输出设备: {:?}",
+                            self.devices.selected_output_devices
+                        );
+                        let mut config = self.params.build_engine_config(
+                            if self.devices.selected_input_device.is_empty() {
+                                None
+                            } else {
+                                Some(self.devices.selected_input_device.clone())
+                            },
+                            self.devices
+                                .selected_output_devices
+                                .iter()
+                                .cloned()
+                                .collect(),
+                        );
+                        // 使用设备面板中选择的音源类型和回采设备
+                        config.source_type = self.devices.source_type.clone();
+                        config.loopback_device = if self.devices.selected_loopback_device.is_empty() {
                             None
                         } else {
-                            Some(self.devices.selected_input_device.clone())
-                        },
-                        self.devices
-                            .selected_output_devices
-                            .iter()
-                            .cloned()
-                            .collect(),
-                    );
-                    // 使用设备面板中选择的音源类型和回采设备
-                    config.source_type = self.devices.source_type.clone();
-                    config.loopback_device = if self.devices.selected_loopback_device.is_empty() {
-                        None
-                    } else {
-                        Some(self.devices.selected_loopback_device.clone())
-                    };
-                    let _ = self.engine_tx.send(GuiToEngine::Start(config));
+                            Some(self.devices.selected_loopback_device.clone())
+                        };
+                        tracing::info!("正在发送启动指令给引擎线程");
+                        let _ = self.engine_tx.send(GuiToEngine::Start(config));
+                        tracing::info!("启动指令已发送");
+                    }
                 }
                 toolbar::ToolbarAction::Stop => {
                     let _ = self.engine_tx.send(GuiToEngine::Stop);
@@ -457,6 +477,7 @@ pub fn run_gui(config_path: Option<String>) -> crate::error::Result<()> {
     };
 
     // ---------- 创建消息通道 ----------
+    tracing::info!("正在创建消息通道...");
     // engine_to_gui: 引擎 → GUI 方向
     let (engine_to_gui_tx, engine_to_gui_rx) =
         crossbeam_channel::unbounded::<EngineToGui>();
@@ -465,7 +486,9 @@ pub fn run_gui(config_path: Option<String>) -> crate::error::Result<()> {
         crossbeam_channel::unbounded::<GuiToEngine>();
 
     // 启动后台音频引擎线程，监听 GUI 消息并执行音频管道
+    tracing::info!("正在启动引擎线程...");
     crate::engine::spawn_engine(gui_to_engine_rx, engine_to_gui_tx);
+    tracing::info!("引擎线程已启动，正在创建 GUI 应用...");
 
     // ---------- 构造应用程序实例 ----------
     let app = AudioRouterApp::new(

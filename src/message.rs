@@ -122,6 +122,8 @@ pub enum GuiToEngine {
 /// 音频引擎发送给 GUI 的消息
 #[derive(Debug, Clone)]
 pub enum EngineToGui {
+    /// 引擎线程已就绪，等待启动指令
+    Ready,
     /// 引擎已成功启动
     Started,
     /// 引擎已停止，携带各输出设备在运行期间的最终统计快照

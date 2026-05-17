@@ -80,6 +80,11 @@ impl PlaybackStream {
             .build_output_stream(config, data_callback, error_callback, None)
             .map_err(|e: cpal::BuildStreamError| crate::error::AudioRouterError::StreamError(e.to_string()))?;
 
+        // 启动音频流（cpal 创建的流默认处于暂停状态，必须调用 play() 才能触发回调）
+        stream
+            .play()
+            .map_err(|e: cpal::PlayStreamError| crate::error::AudioRouterError::StreamError(format!("无法启动输出流: {}", e)))?;
+
         Ok(Self {
             stream,
             ready,
