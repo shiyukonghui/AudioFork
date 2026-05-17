@@ -19,10 +19,11 @@ egui = "0.31"
 eframe = "0.31"
 rfd = "0.15"
 sysinfo = "0.33"
+tray-icon = "0.19"
 wasapi = { version = "0.22", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_System_Console"] }
+windows = { version = "0.58", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [features]
 default = []

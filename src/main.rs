@@ -82,7 +82,6 @@ fn main() {
     {
         let should_hide_console = cli_args.gui || !cli_args.has_operational_args();
         if should_hide_console {
-            // 调用 Windows API 释放控制台，隐藏命令行窗口
             unsafe {
                 let _ = windows::Win32::System::Console::FreeConsole();
             }
