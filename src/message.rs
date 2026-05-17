@@ -127,11 +127,13 @@ pub enum EngineToGui {
     /// 引擎已停止，携带各输出设备在运行期间的最终统计快照
     Stopped { stats: Vec<OutputSnapshot> },
     /// 设备列表已更新（如热插拔事件），携带当前所有设备信息
+    #[allow(dead_code)]
     DeviceListUpdated(Vec<DeviceInfoSnapshot>),
     /// 输出设备实时诊断状态更新
     OutputStatus(Vec<OutputSnapshot>),
     /// 引擎发生错误，携带错误描述信息
     Error(String),
     /// 引擎日志消息
+    #[allow(dead_code)]
     Log(String),
 }

@@ -15,6 +15,7 @@ use rubato::audioadapter_buffers::direct::SequentialSliceOfVecs;
 // ============================================================================
 
 /// 重采样操作的 Result 别名
+#[allow(dead_code)]
 pub type ResampleResult = Result<(), String>;
 
 // ============================================================================
@@ -33,22 +34,26 @@ pub enum ResamplerType {
 }
 
 /// 使用 Sinc 插值的异步重采样器状态
-struct SincState {
+pub struct SincState {
     /// rubato 异步重采样器实例
     resampler: Async<f32>,
     /// 当前输入采样率 (Hz)
+    #[allow(dead_code)]
     input_rate: f64,
     /// 当前输出采样率 (Hz)
+    #[allow(dead_code)]
     output_rate: f64,
 }
 
 /// 使用 FFT 的同步重采样器状态
-struct CubicState {
+pub struct CubicState {
     /// rubato FFT 重采样器实例
     resampler: Fft<f32>,
     /// 输入采样率 (Hz)，创建后固定
+    #[allow(dead_code)]
     input_rate: f64,
     /// 输出采样率 (Hz)，创建后固定
+    #[allow(dead_code)]
     output_rate: f64,
 }
 
@@ -204,6 +209,7 @@ impl ResampleProcessor {
     }
 
     /// 获取下一次 process 调用将产生的输出帧数
+    #[allow(dead_code)]
     pub fn output_frames_next(&self) -> usize {
         match self {
             ResampleProcessor::Sinc(state) => state.resampler.output_frames_next(),
@@ -215,6 +221,7 @@ impl ResampleProcessor {
     /// 获取重采样器的输出延迟（以输出帧为单位）
     ///
     /// 表示输入中的事件在输出中出现之前被延迟了多少帧。
+    #[allow(dead_code)]
     pub fn output_delay(&self) -> usize {
         match self {
             ResampleProcessor::Sinc(state) => state.resampler.output_delay(),
@@ -233,11 +240,13 @@ impl ResampleProcessor {
     }
 
     /// 判断是否为直通模式（不进行任何重采样）
+    #[allow(dead_code)]
     pub fn is_passthrough(&self) -> bool {
         matches!(self, ResampleProcessor::PassThrough)
     }
 
     /// 获取当前输入采样率 (Hz)
+    #[allow(dead_code)]
     pub fn input_sample_rate(&self) -> f64 {
         match self {
             ResampleProcessor::Sinc(state) => state.input_rate,
@@ -247,6 +256,7 @@ impl ResampleProcessor {
     }
 
     /// 获取当前输出采样率 (Hz)
+    #[allow(dead_code)]
     pub fn output_sample_rate(&self) -> f64 {
         match self {
             ResampleProcessor::Sinc(state) => state.output_rate,
@@ -259,6 +269,7 @@ impl ResampleProcessor {
     ///
     /// 通过调整重采样比率来实现采样率变更。
     /// 注意：仅 Sinc 异步重采样器支持动态调整，Cubic(FFT) 不支持。
+    #[allow(dead_code)]
     pub fn set_input_sample_rate(&mut self, rate: f64) {
         match self {
             ResampleProcessor::Sinc(state) => {
@@ -279,6 +290,7 @@ impl ResampleProcessor {
     ///
     /// 通过调整重采样比率来实现采样率变更。
     /// 注意：仅 Sinc 异步重采样器支持动态调整，Cubic(FFT) 不支持。
+    #[allow(dead_code)]
     pub fn set_output_sample_rate(&mut self, rate: f64) {
         match self {
             ResampleProcessor::Sinc(state) => {
@@ -314,7 +326,7 @@ fn process_with_resampler<R: Resampler<f32>>(
     let input_frames = input.len() / channels;
 
     // 将交错格式拆分为每个声道独立的 Vec
-    let mut deinterleaved_input: Vec<Vec<f32>> = (0..channels)
+    let deinterleaved_input: Vec<Vec<f32>> = (0..channels)
         .map(|ch| {
             let mut chan_data = Vec::with_capacity(input_frames);
             for f in 0..input_frames {

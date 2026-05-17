@@ -155,6 +155,7 @@ impl BrickwallLimiter {
     /// 切换启用/禁用状态
     ///
     /// 禁用时 `process()` 将直接返回不处理，不影响音频直通。
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
@@ -162,6 +163,7 @@ impl BrickwallLimiter {
     /// 重置所有声道的峰值包络为零
     ///
     /// 在切换输入源或长时间静音后调用，避免释放残留包络造成不必要的衰减。
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         for v in self.envelope.iter_mut() {
             *v = 0.0;
@@ -169,6 +171,7 @@ impl BrickwallLimiter {
     }
 
     /// 查询当前启用状态
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }

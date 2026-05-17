@@ -65,7 +65,7 @@ impl Default for AudioRouterConfig {
             monitor: false,
             wasapi_exclusive: false,
             no_limiter: false,
-            gui_enabled: false,
+            gui_enabled: true,
             source_type: "input".to_string(),
             loopback_device: None,
             // input_fallback_to_default 默认启用降级

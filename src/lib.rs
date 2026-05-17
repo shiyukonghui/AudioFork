@@ -15,3 +15,4 @@ pub mod resample;
 pub mod message;
 pub mod source;
 pub mod gui;
+pub mod engine;

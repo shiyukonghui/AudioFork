@@ -458,16 +458,14 @@ pub fn run_gui(config_path: Option<String>) -> crate::error::Result<()> {
 
     // ---------- 创建消息通道 ----------
     // engine_to_gui: 引擎 → GUI 方向
-    // engine_to_gui_tx 预留给未来的引擎线程使用，GUI 端仅持有 rx
-    let (_engine_to_gui_tx, engine_to_gui_rx) =
+    let (engine_to_gui_tx, engine_to_gui_rx) =
         crossbeam_channel::unbounded::<EngineToGui>();
     // gui_to_engine: GUI → 引擎方向
     let (gui_to_engine_tx, gui_to_engine_rx) =
         crossbeam_channel::unbounded::<GuiToEngine>();
 
-    // 提示：gui_to_engine_rx 预留给未来的引擎线程使用
-    // 当前 GUI 模式下仅搭建通道框架，引擎端将在后续阶段实现
-    let _ = gui_to_engine_rx;
+    // 启动后台音频引擎线程，监听 GUI 消息并执行音频管道
+    crate::engine::spawn_engine(gui_to_engine_rx, engine_to_gui_tx);
 
     // ---------- 构造应用程序实例 ----------
     let app = AudioRouterApp::new(

@@ -16,6 +16,7 @@ pub enum AudioRouterError {
     /// 致命错误，立即退出
     Fatal(String),
     /// 消息通道错误
+    #[allow(dead_code)]
     ChannelError(String),
     /// 功能不支持（如非 Windows 平台 Loopback）
     NotSupported(String),
@@ -38,6 +39,7 @@ impl std::error::Error for AudioRouterError {}
 
 /// 错误严重级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ErrorSeverity {
     /// 可恢复（如输出流断开，槽位停用）
     Recoverable,
@@ -53,6 +55,7 @@ pub enum RecoveryState {
     /// 正常运行
     Normal,
     /// 指数退避重连原设备
+    #[allow(dead_code)]
     ReconnectBackoff {
         /// 当前重试次数
         attempt: u32,

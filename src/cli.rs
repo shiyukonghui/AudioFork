@@ -118,6 +118,7 @@ pub struct ResolvedConfig {
     /// 输入设备丢失后是否降级使用默认设备
     pub input_fallback_to_default: bool,
     /// 日志文件路径，None 表示不输出日志
+    #[allow(dead_code)]
     pub log_file: Option<String>,
     /// 是否启用 JSON 监控输出
     pub monitor: bool,
@@ -135,10 +136,34 @@ pub struct ResolvedConfig {
     /// Loopback 回采设备
     pub loopback_device: Option<String>,
     /// 预设配置路径，None 表示未导入预设
+    #[allow(dead_code)]
     pub preset_path: Option<String>,
 }
 
 impl CliArgs {
+    /// 判断是否传入了音频路由操作参数（排除 --gui / --config / --log-file）
+    ///
+    /// 当用户通过命令行传入了与音频处理相关的参数时返回 true，
+    /// 这些参数表明用户意图以 CLI 模式运行而非 GUI 模式。
+    fn has_operational_args(&self) -> bool {
+        self.input_device.is_some()
+            || !self.output_device.is_empty()
+            || self.sample_rate.is_some()
+            || self.channels.is_some()
+            || self.buffer_frames.is_some()
+            || self.max_latency_ms.is_some()
+            || self.resampler.is_some()
+            || self.no_drift_compensation
+            || self.exit_on_input_loss
+            || self.input_fallback_to_default
+            || self.monitor
+            || self.no_limiter
+            || self.source_type != "input"
+            || self.loopback_device.is_some()
+            || self.preset.is_some()
+        // 排除 --config（meta 参数）、--log-file（正交参数）、--gui（GUI 标识）
+    }
+
     /// 将命令行参数与配置文件合并，生成最终运行配置
     ///
     /// 合并规则：
@@ -243,9 +268,12 @@ impl CliArgs {
                 config.no_limiter
             },
 
-            // 图形界面模式：CLI 标志优先
+            // 图形界面模式：--gui 标志最优先，否则若传入了操作参数表明用户意图 CLI，
+            // 最后 fallback 到配置文件设置（默认 true，即双击 EXE 默认启动 GUI）
             gui: if self.gui {
                 true
+            } else if self.has_operational_args() {
+                false
             } else {
                 config.gui_enabled
             },
@@ -278,6 +306,7 @@ impl CliArgs {
     /// 判断当前是否为 GUI 图形界面模式
     ///
     /// 返回 true 表示用户请求启动图形界面
+    #[allow(dead_code)]
     pub fn is_gui_mode(&self) -> bool {
         self.gui
     }

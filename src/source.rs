@@ -29,6 +29,7 @@ impl SourceType {
     }
 
     /// 是否为 Loopback 模式
+    #[allow(dead_code)]
     pub fn is_loopback(&self) -> bool {
         matches!(self, SourceType::Loopback)
     }

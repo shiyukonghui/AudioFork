@@ -13,10 +13,12 @@ use std::time::{Duration, Instant};
 /// 音频输出流封装，管理 cpal 输出流的完整生命周期和运行状态
 pub struct PlaybackStream {
     /// 底层 cpal 音频输出流
+    #[allow(dead_code)]
     stream: cpal::Stream,
     /// 流是否已就绪（首次收到音频数据回调后置为 true）
     ready: Arc<AtomicBool>,
     /// 流是否处于暂停状态
+    #[allow(dead_code)]
     paused: Arc<AtomicBool>,
 }
 
@@ -118,6 +120,7 @@ impl PlaybackStream {
     /// 暂停音频输出流
     ///
     /// 调用后系统不再请求音频数据，直到调用 `resume()` 恢复。
+    #[allow(dead_code)]
     pub fn pause(&self) -> crate::error::Result<()> {
         self.stream
             .pause()
@@ -129,6 +132,7 @@ impl PlaybackStream {
     /// 恢复音频输出流
     ///
     /// 恢复后系统重新开始请求音频数据。
+    #[allow(dead_code)]
     pub fn resume(&self) -> crate::error::Result<()> {
         self.stream
             .play()
@@ -138,6 +142,7 @@ impl PlaybackStream {
     }
 
     /// 查询流是否处于暂停状态
+    #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
     }

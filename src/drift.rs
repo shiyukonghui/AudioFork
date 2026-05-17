@@ -183,6 +183,7 @@ impl DriftCompensator {
     /// 返回当前 EMA 平滑后的水位值（0.0 ~ 1.0）
     ///
     /// 原始归一化值，0.5 表示缓冲区恰好半满（理想状态）。
+    #[allow(dead_code)]
     pub fn ema_level_val(&self) -> f64 {
         self.ema_level
     }
@@ -194,6 +195,7 @@ impl DriftCompensator {
     /// - 关闭时：立即将 delta 清零，停止帧数微调，
     ///   但 PI 内部状态（`ema_level`、`integral`）保持不变。
     /// - 重新启用时：从上次的状态无缝恢复，无需重新收敛。
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         if !enabled {
@@ -203,6 +205,7 @@ impl DriftCompensator {
     }
 
     /// 查询漂移补偿是否处于启用状态
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }

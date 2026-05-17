@@ -95,6 +95,7 @@ impl SlotArray {
     /// 获取所有活跃槽位的索引列表
     ///
     /// 使用 Acquire 读取 active 标志，确保与 allocate_slot 的 Release 形成同步关系。
+    #[allow(dead_code)]
     pub fn active_slots(&self) -> Vec<usize> {
         let mut result = Vec::new();
         for (i, slot) in self.slots.iter().enumerate() {
@@ -172,6 +173,7 @@ impl Fader {
     }
 
     /// 启动淡入（从静音到正常）
+    #[allow(dead_code)]
     pub fn start_fade_in(&self) {
         self.fade_count
             .store(self.fade_len as i32, Ordering::Release);

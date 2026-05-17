@@ -22,6 +22,7 @@ pub enum RecoveryAction {
     /// 降级：尝试连接到系统默认输入设备
     TryFallbackToDefault,
     /// 应立即退出进程（exit_on_loss 模式下输入丢失）
+    #[allow(dead_code)]
     ShouldExit,
 }
 
@@ -41,16 +42,19 @@ pub struct InputRecoveryManager {
     /// 当前恢复状态
     state: RecoveryState,
     /// 是否在输入丢失时直接退出进程
+    #[allow(dead_code)]
     exit_on_loss: bool,
     /// 是否在超时后降级到系统默认设备
     fallback_to_default: bool,
     /// 输入丢失标志（供音频回调线程读取，用于静音输出等降级操作）
+    #[allow(dead_code)]
     pub input_lost: Arc<AtomicBool>,
     /// 输入丢失发生的时刻（用于判断是否超过 30 秒阈值）
     lost_time: Option<Instant>,
     /// 累计等待时间（每次 tick 累加 100ms，达到阈值后触发动作并归零）
     accumulated_wait: Duration,
     /// 原始输入设备名称（用于日志/重连定位）
+    #[allow(dead_code)]
     original_device_name: Option<String>,
 }
 
@@ -86,6 +90,7 @@ impl InputRecoveryManager {
     ///
     /// - exit_on_loss 模式：设置 input_lost 标志并返回 `ShouldExit`
     /// - 正常模式：设置 input_lost 标志，记录丢失时刻，进入指数退避重连阶段
+    #[allow(dead_code)]
     pub fn on_input_lost(&mut self) -> RecoveryAction {
         if self.exit_on_loss {
             // 退出模式：设置标志，通知调用者退出
@@ -108,6 +113,7 @@ impl InputRecoveryManager {
     /// 输入设备恢复时的回调
     ///
     /// 重置所有状态回到 Normal，清除丢失标志
+    #[allow(dead_code)]
     pub fn on_input_recovered(&mut self) {
         self.input_lost.store(false, Ordering::Release);
         self.state = RecoveryState::Normal;
@@ -213,11 +219,13 @@ impl InputRecoveryManager {
     /// 是否应该退出进程
     ///
     /// 当 `exit_on_loss` 为 true 且输入已丢失（input_lost 标志为 true）时返回 true
+    #[allow(dead_code)]
     pub fn should_exit(&self) -> bool {
         self.exit_on_loss && self.input_lost.load(Ordering::Acquire)
     }
 
     /// 当前是否处于正常运行状态
+    #[allow(dead_code)]
     pub fn is_normal(&self) -> bool {
         matches!(self.state, RecoveryState::Normal)
     }
@@ -225,6 +233,7 @@ impl InputRecoveryManager {
     /// 获取 input_lost 标志的 Arc 克隆
     ///
     /// 供音频回调线程读取，用于判断是否应静音输出
+    #[allow(dead_code)]
     pub fn input_lost_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.input_lost)
     }

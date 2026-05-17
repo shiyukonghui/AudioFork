@@ -15,6 +15,7 @@ mod hotplug;
 mod resample;
 mod message;
 mod gui;
+mod engine;
 mod source;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
@@ -40,6 +41,7 @@ use crate::pipeline::{Fader, SlotArray, MAX_OUTPUTS};
 // ============================================================================
 // 输出槽位：将播放流及其元数据捆绑在一起，便于统一管理生命周期
 // ============================================================================
+#[allow(dead_code)]
 struct OutputSlot {
     /// 底层 cpal 输出播放流
     playback: PlaybackStream,

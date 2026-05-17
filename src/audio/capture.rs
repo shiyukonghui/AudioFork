@@ -15,8 +15,10 @@ use crate::error::AudioRouterError;
 /// - 析构时自动停止流
 pub struct CaptureStream {
     /// 底层 cpal 输入流
+    #[allow(dead_code)]
     stream: cpal::Stream,
     /// 暂停状态标记（原子变量，支持内部可变性）
+    #[allow(dead_code)]
     paused: AtomicBool,
 }
 
@@ -137,6 +139,7 @@ impl CaptureStream {
     /// 暂停输入流
     ///
     /// 暂停后不再触发 `on_data` 回调，直到调用 `resume()` 恢复。
+    #[allow(dead_code)]
     pub fn pause(&self) -> crate::error::Result<()> {
         self.stream
             .pause()
@@ -150,6 +153,7 @@ impl CaptureStream {
     /// 恢复输入流
     ///
     /// 恢复后继续触发 `on_data` 回调接收音频数据。
+    #[allow(dead_code)]
     pub fn resume(&self) -> crate::error::Result<()> {
         self.stream
             .play()
@@ -161,6 +165,7 @@ impl CaptureStream {
     }
 
     /// 查询当前是否处于暂停状态
+    #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
     }

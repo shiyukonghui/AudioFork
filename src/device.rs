@@ -14,6 +14,7 @@ pub enum DeviceType {
     /// 网络音频设备（AirPlay、DLNA、Chromecast 等）
     Network,
     /// 无法识别的设备类型
+    #[allow(dead_code)]
     Unknown,
 }
 
