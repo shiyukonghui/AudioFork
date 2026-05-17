@@ -21,7 +21,7 @@ pub struct CaptureStream {
 }
 
 impl CaptureStream {
-    /// 构造新的输入捕获流
+    /// 从输入设备创建新的捕获流
     ///
     /// # 参数
     /// * `device` - 输入音频设备引用
@@ -32,7 +32,7 @@ impl CaptureStream {
     ///
     /// # 错误
     /// 无法从设备创建输入流时返回 `AudioRouterError::StreamError`
-    pub fn new<F>(
+    pub fn from_input_device<F>(
         device: &cpal::Device,
         config: &cpal::StreamConfig,
         mut on_data: F,
@@ -65,6 +65,72 @@ impl CaptureStream {
         Ok(Self {
             stream,
             paused: AtomicBool::new(false),
+        })
+    }
+
+    /// 从输入设备创建新的捕获流（向后兼容别名）
+    ///
+    /// 实际调用 `from_input_device()`，保留此方法以兼容旧版调用代码。
+    pub fn new<F>(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        on_data: F,
+    ) -> crate::error::Result<Self>
+    where
+        F: FnMut(&[f32]) + Send + 'static,
+    {
+        Self::from_input_device(device, config, on_data)
+    }
+
+    /// 从输出设备的 Loopback 回采流创建捕获流（Windows WASAPI）
+    ///
+    /// 仅在 Windows 平台原生支持，其他平台需安装虚拟声卡。
+    /// 通过 WASAPI 的 loopback 模式回采输出设备的音频数据。
+    ///
+    /// # 参数
+    /// * `device` - 输出音频设备引用
+    /// * `config` - 流配置（采样率、通道数、缓冲区大小等）
+    /// * `on_data` - 音频数据回调，每次收到回采数据时被调用
+    ///
+    /// # 错误
+    /// 非 Windows 平台返回 `AudioRouterError::NotSupported`
+    pub fn from_loopback<F>(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        mut on_data: F,
+    ) -> crate::error::Result<Self>
+    where
+        F: FnMut(&[f32]) + Send + 'static,
+    {
+        // 非 Windows 平台：返回 NotSupported 错误
+        if !crate::source::is_loopback_native_supported() {
+            return Err(crate::error::AudioRouterError::NotSupported(
+                crate::source::loopback_unsupported_message().to_string(),
+            ));
+        }
+        // Windows 平台：对输出设备创建输入流（WASAPI 自动处理 loopback）
+        // 适配 cpal 0.15 的回调签名
+        let data_callback = move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+            on_data(data);
+        };
+        let stream = device
+            .build_input_stream(
+                config,
+                data_callback,
+                |err| {
+                    tracing::error!(?err, "Loopback 捕获流内部错误");
+                },
+                None,
+            )
+            .map_err(|e: cpal::BuildStreamError| {
+                crate::error::AudioRouterError::StreamError(format!(
+                    "无法创建 Loopback 捕获流: {}",
+                    e
+                ))
+            })?;
+        Ok(Self {
+            stream,
+            paused: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

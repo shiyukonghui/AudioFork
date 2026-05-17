@@ -13,4 +13,5 @@ pub mod limiter;
 pub mod hotplug;
 pub mod resample;
 pub mod message;
+pub mod source;
 pub mod gui;

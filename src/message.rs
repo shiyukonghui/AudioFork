@@ -80,6 +80,10 @@ pub struct EngineConfig {
     pub wasapi_exclusive: bool,
     /// 是否禁用砖墙限幅器
     pub no_limiter: bool,
+    /// 音频源类型："input" / "loopback"
+    pub source_type: String,
+    /// 回环捕获设备名称，None 表示使用默认回环设备
+    pub loopback_device: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -96,6 +100,8 @@ impl Default for EngineConfig {
             input_fallback_to_default: true,
             wasapi_exclusive: false,
             no_limiter: false,
+            source_type: "input".to_string(),
+            loopback_device: None,
         }
     }
 }

@@ -22,6 +22,10 @@ pub enum DevicesPanelAction {
     InputDeviceSelected(String),
     /// 切换了某个输出设备的勾选状态
     OutputDeviceToggled(String),
+    /// 音源类型切换（"input" / "loopback"）
+    SourceTypeChanged(String),
+    /// 选择了某个 Loopback 回采设备（空字符串表示系统默认）
+    LoopbackDeviceSelected(String),
 }
 
 // ============================================================================
@@ -41,6 +45,12 @@ pub struct DevicesPanelState {
     pub selected_output_devices: HashSet<String>,
     /// 音频引擎是否正在运行（运行中禁用控件修改）
     pub engine_running: bool,
+    /// 当前音源类型："input" 或 "loopback"
+    pub source_type: String,
+    /// 回采设备快照列表（Loopback 模式下的候选输出设备）
+    pub loopback_devices: Vec<DeviceInfoSnapshot>,
+    /// 当前选中的回采设备名（空字符串表示使用系统默认）
+    pub selected_loopback_device: String,
 }
 
 impl DevicesPanelState {
@@ -57,6 +67,9 @@ impl DevicesPanelState {
             selected_input_device: String::new(),
             selected_output_devices: HashSet::new(),
             engine_running: false,
+            source_type: "input".to_string(),
+            loopback_devices: Vec::new(),
+            selected_loopback_device: String::new(),
         }
     }
 
@@ -91,6 +104,16 @@ impl DevicesPanelState {
             }
         }
 
+        // 刷新 Loopback 回采设备列表
+        match crate::device::enumerate_loopback_devices() {
+            Ok(loopbacks) => {
+                self.loopback_devices = loopbacks.iter().map(|info| info.into()).collect();
+            }
+            Err(e) => {
+                tracing::warn!("枚举 Loopback 设备失败: {}", e);
+            }
+        }
+
         Ok(())
     }
 
@@ -113,56 +136,113 @@ impl DevicesPanelState {
         // 整个面板放在可滚动区域中
         egui::ScrollArea::vertical().show(ui, |ui| {
             // ================================================================
-            // 输入设备区
+            // 音源类型选择
             // ================================================================
-            ui.heading("输入设备");
-
-            // 引擎运行中则禁用所有输入控件
+            ui.heading("音源类型");
             ui.add_enabled_ui(!self.engine_running, |ui| {
-                // 构建下拉框当前选中文本
-                let selected_text = if self.selected_input_device.is_empty() {
-                    "系统默认".to_string()
-                } else {
-                    self.selected_input_device.clone()
-                };
-
-                // 输入设备下拉选择框
-                egui::ComboBox::from_label("输入设备")
-                    .selected_text(&selected_text)
-                    .show_ui(ui, |ui| {
-                        // "系统默认"特殊选项
-                        if ui
-                            .selectable_label(
-                                self.selected_input_device.is_empty(),
-                                "系统默认",
-                            )
-                            .clicked()
-                        {
-                            action =
-                                DevicesPanelAction::InputDeviceSelected(String::new());
+                let is_windows = crate::source::is_loopback_native_supported();
+                ui.horizontal(|ui| {
+                    if ui.radio_value(&mut self.source_type, "input".to_string(), "物理输入设备（麦克风）").changed() {
+                        action = DevicesPanelAction::SourceTypeChanged("input".to_string());
+                    }
+                    if is_windows {
+                        if ui.radio_value(&mut self.source_type, "loopback".to_string(), "系统音频回采（Loopback）").changed() {
+                            action = DevicesPanelAction::SourceTypeChanged("loopback".to_string());
                         }
-                        // 遍历所有输入设备生成下拉选项
-                        // 格式: "设备名 [48000Hz, 2ch, f32]"
-                        for device in &self.input_devices {
-                            let label = format!(
-                                "{} [{}Hz, {}ch, {}]",
-                                device.name,
-                                device.sample_rate,
-                                device.channels,
-                                device.format
-                            );
-                            let is_selected = !self.selected_input_device.is_empty()
-                                && self.selected_input_device == device.name;
-                            if ui.selectable_label(is_selected, &label).clicked() {
-                                action = DevicesPanelAction::InputDeviceSelected(
-                                    device.name.clone(),
-                                );
-                            }
+                    } else {
+                        ui.radio_value(&mut self.source_type, "loopback".to_string(), "系统音频回采（Loopback） ⚠");
+                        if ui.radio_value(&mut self.source_type, "loopback".to_string(), "系统音频回采（Loopback） ⚠").changed() {
+                            action = DevicesPanelAction::SourceTypeChanged("loopback".to_string());
                         }
-                    });
+                        ui.label("⚠ 当前平台不支持直接 Loopback，请安装虚拟声卡").on_hover_text(crate::source::loopback_unsupported_message());
+                    }
+                });
             });
 
             ui.separator();
+
+            // ================================================================
+            // 回采设备区（Loopback 模式）
+            // ================================================================
+            if self.source_type == "loopback" {
+                ui.heading("回采设备");
+                ui.add_enabled_ui(!self.engine_running, |ui| {
+                    let selected_text = if self.selected_loopback_device.is_empty() {
+                        "系统默认".to_string()
+                    } else {
+                        self.selected_loopback_device.clone()
+                    };
+                    egui::ComboBox::from_label("回采设备")
+                        .selected_text(&selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(self.selected_loopback_device.is_empty(), "系统默认").clicked() {
+                                action = DevicesPanelAction::LoopbackDeviceSelected(String::new());
+                            }
+                            for device in &self.loopback_devices {
+                                let label = format!("{} [{}Hz, {}ch, {}]", device.name, device.sample_rate, device.channels, device.format);
+                                let is_selected = !self.selected_loopback_device.is_empty() && self.selected_loopback_device == device.name;
+                                if ui.selectable_label(is_selected, &label).clicked() {
+                                    action = DevicesPanelAction::LoopbackDeviceSelected(device.name.clone());
+                                }
+                            }
+                        });
+                });
+                ui.separator();
+            }
+
+            // ================================================================
+            // 输入设备区
+            // ================================================================
+            if self.source_type == "input" {
+                ui.heading("输入设备");
+
+                // 引擎运行中则禁用所有输入控件
+                ui.add_enabled_ui(!self.engine_running, |ui| {
+                    // 构建下拉框当前选中文本
+                    let selected_text = if self.selected_input_device.is_empty() {
+                        "系统默认".to_string()
+                    } else {
+                        self.selected_input_device.clone()
+                    };
+
+                    // 输入设备下拉选择框
+                    egui::ComboBox::from_label("输入设备")
+                        .selected_text(&selected_text)
+                        .show_ui(ui, |ui| {
+                            // "系统默认"特殊选项
+                            if ui
+                                .selectable_label(
+                                    self.selected_input_device.is_empty(),
+                                    "系统默认",
+                                )
+                                .clicked()
+                            {
+                                action =
+                                    DevicesPanelAction::InputDeviceSelected(String::new());
+                            }
+                            // 遍历所有输入设备生成下拉选项
+                            // 格式: "设备名 [48000Hz, 2ch, f32]"
+                            for device in &self.input_devices {
+                                let label = format!(
+                                    "{} [{}Hz, {}ch, {}]",
+                                    device.name,
+                                    device.sample_rate,
+                                    device.channels,
+                                    device.format
+                                );
+                                let is_selected = !self.selected_input_device.is_empty()
+                                    && self.selected_input_device == device.name;
+                                if ui.selectable_label(is_selected, &label).clicked() {
+                                    action = DevicesPanelAction::InputDeviceSelected(
+                                        device.name.clone(),
+                                    );
+                                }
+                            }
+                        });
+                });
+
+                ui.separator();
+            }
 
             // ================================================================
             // 输出设备区

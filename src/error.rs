@@ -17,6 +17,8 @@ pub enum AudioRouterError {
     Fatal(String),
     /// 消息通道错误
     ChannelError(String),
+    /// 功能不支持（如非 Windows 平台 Loopback）
+    NotSupported(String),
 }
 
 impl fmt::Display for AudioRouterError {
@@ -27,6 +29,7 @@ impl fmt::Display for AudioRouterError {
             Self::ConfigError(msg) => write!(f, "配置错误: {}", msg),
             Self::Fatal(msg) => write!(f, "致命错误: {}", msg),
             Self::ChannelError(msg) => write!(f, "消息通道错误: {}", msg),
+            Self::NotSupported(msg) => write!(f, "不支持的操作: {}", msg),
         }
     }
 }

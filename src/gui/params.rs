@@ -24,6 +24,10 @@ pub struct ParamsPanelState {
     pub input_fallback_to_default: bool,
     /// 是否禁用砖墙限幅器
     pub no_limiter: bool,
+    /// 音频源类型："input" / "loopback"
+    pub source_type: String,
+    /// 回环捕获设备名称，None 表示使用默认回环设备
+    pub loopback_device: Option<String>,
     /// 引擎是否正在运行（运行中锁定参数编辑）
     pub engine_running: bool,
 }
@@ -43,6 +47,8 @@ impl ParamsPanelState {
             exit_on_input_loss: false,
             input_fallback_to_default: false,
             no_limiter: false,
+            source_type: "input".to_string(),
+            loopback_device: None,
             engine_running: false,
         }
     }
@@ -65,6 +71,8 @@ impl ParamsPanelState {
         self.exit_on_input_loss = config.exit_on_input_loss;
         self.input_fallback_to_default = config.input_fallback_to_default;
         self.no_limiter = config.no_limiter;
+        self.source_type = config.source_type.clone();
+        self.loopback_device = config.loopback_device.clone();
     }
 
     /// 根据面板当前状态构建 EngineConfig
@@ -94,6 +102,8 @@ impl ParamsPanelState {
             input_fallback_to_default: self.input_fallback_to_default,
             wasapi_exclusive: self.wasapi_exclusive,
             no_limiter: self.no_limiter,
+            source_type: self.source_type.clone(),
+            loopback_device: self.loopback_device.clone(),
         }
     }
 

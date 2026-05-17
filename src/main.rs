@@ -15,6 +15,7 @@ mod hotplug;
 mod resample;
 mod message;
 mod gui;
+mod source;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -170,7 +171,13 @@ fn run() -> Result<()> {
     }
 
     // ========================================================================
-    // 5. 枚举所有音频设备并打印信息
+    // 5. 解析音源类型
+    // ========================================================================
+    let source_type = crate::source::SourceType::from_str(&resolved.source_type);
+    tracing::info!("音源类型: {}", source_type.as_str());
+
+    // ========================================================================
+    // 6. 枚举所有音频设备并打印信息
     // ========================================================================
     tracing::info!("正在枚举音频设备...");
     enumerate_and_log_devices()?;
@@ -180,10 +187,18 @@ fn run() -> Result<()> {
     // ========================================================================
     tracing::info!("正在选择音频设备...");
 
-    // 选择输入设备（按名称匹配或使用系统默认）
-    let (device_in, info_in) =
-        device::select_input_device(resolved.input_device.as_deref())?;
-    tracing::info!("输入设备: {}", info_in.name);
+    // 根据音源类型选择采集源
+    let (device_source, info_source) = match source_type {
+        crate::source::SourceType::Loopback => {
+            tracing::info!("音源类型: Loopback（系统音频回采）");
+            device::select_loopback_device(resolved.loopback_device.as_deref())?
+        }
+        crate::source::SourceType::InputDevice => {
+            tracing::info!("音源类型: 物理输入设备");
+            device::select_input_device(resolved.input_device.as_deref())?
+        }
+    };
+    tracing::info!("音源设备: {}", info_source.name);
 
     // 选择所有输出设备（Phase 2 取全部，不再只取第一个）
     let output_devices = device::select_output_devices(&resolved.output_devices)?;
@@ -462,16 +477,23 @@ fn run() -> Result<()> {
     let mut recovery = InputRecoveryManager::new(
         resolved.exit_on_input_loss,
         resolved.input_fallback_to_default,
-        Some(info_in.name.clone()),
+        Some(info_source.name.clone()),
     );
 
-    // 12.3 启动输入流
+    // 12.3 根据音源类型创建捕获流
     let on_input = pipeline::create_input_callback(
         Arc::clone(&slot_array),
         Arc::clone(&overflow_counters),
     );
-    let capture = CaptureStream::new(&device_in, &input_config, on_input)?;
-    tracing::info!("输入流已启动");
+    let capture = match source_type {
+        crate::source::SourceType::Loopback => {
+            CaptureStream::from_loopback(&device_source, &input_config, on_input)?
+        }
+        crate::source::SourceType::InputDevice => {
+            CaptureStream::new(&device_source, &input_config, on_input)?
+        }
+    };
+    tracing::info!("音源流已启动（{}）", source_type.as_str());
 
     // 12.4 漂移补偿控制标志
     let drift_stop_flag = Arc::new(AtomicBool::new(false));
@@ -490,7 +512,7 @@ fn run() -> Result<()> {
     // ========================================================================
     tracing::info!("==========================================");
     tracing::info!("  音频路由器 Phase 3 已启动");
-    tracing::info!("  输入设备: {}", info_in.name);
+    tracing::info!("  音源设备: {}（类型: {}）", info_source.name, source_type.as_str());
     tracing::info!(
         "  输入配置: {}Hz / {}ch",
         sample_rate,

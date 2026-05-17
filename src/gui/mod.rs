@@ -77,6 +77,9 @@ impl AudioRouterApp {
         toolbar.config_path = config_path.clone();
 
         let mut devices = devices::DevicesPanelState::new();
+        // 从文件配置设置音源类型和回采设备
+        devices.source_type = file_config.source_type.clone();
+        devices.selected_loopback_device = file_config.loopback_device.clone().unwrap_or_default();
         // 尝试枚举设备（初始化时的失败不致命，仅记录警告）
         if let Err(e) = devices.refresh_devices() {
             tracing::warn!("初始化设备列表失败: {}", e);
@@ -95,6 +98,8 @@ impl AudioRouterApp {
             input_fallback_to_default: file_config.input_fallback_to_default,
             no_limiter: file_config.no_limiter,
             wasapi_exclusive: file_config.wasapi_exclusive,
+            source_type: file_config.source_type.clone(),
+            loopback_device: file_config.loopback_device.clone(),
         };
         let mut params = params::ParamsPanelState::new();
         params.load_from_config(&engine_cfg);
@@ -228,7 +233,7 @@ impl eframe::App for AudioRouterApp {
             match self.toolbar.show(ui) {
                 toolbar::ToolbarAction::Start => {
                     // 从参数面板和设备面板收集配置，构建引擎配置
-                    let config = self.params.build_engine_config(
+                    let mut config = self.params.build_engine_config(
                         if self.devices.selected_input_device.is_empty() {
                             None
                         } else {
@@ -240,6 +245,13 @@ impl eframe::App for AudioRouterApp {
                             .cloned()
                             .collect(),
                     );
+                    // 使用设备面板中选择的音源类型和回采设备
+                    config.source_type = self.devices.source_type.clone();
+                    config.loopback_device = if self.devices.selected_loopback_device.is_empty() {
+                        None
+                    } else {
+                        Some(self.devices.selected_loopback_device.clone())
+                    };
                     let _ = self.engine_tx.send(GuiToEngine::Start(config));
                 }
                 toolbar::ToolbarAction::Stop => {
@@ -266,8 +278,13 @@ impl eframe::App for AudioRouterApp {
                                     input_fallback_to_default: cfg.input_fallback_to_default,
                                     no_limiter: cfg.no_limiter,
                                     wasapi_exclusive: cfg.wasapi_exclusive,
+                                    source_type: cfg.source_type.clone(),
+                                    loopback_device: cfg.loopback_device.clone(),
                                 };
                                 self.params.load_from_config(&engine_cfg);
+                                // 设置设备面板的源类型
+                                self.devices.source_type = cfg.source_type.clone();
+                                self.devices.selected_loopback_device = cfg.loopback_device.clone().unwrap_or_default();
                                 let path_str = path.to_string_lossy().to_string();
                                 self.config_path = Some(path_str.clone());
                                 self.toolbar.config_path = Some(path_str);
@@ -316,6 +333,8 @@ impl eframe::App for AudioRouterApp {
                             input_fallback_to_default: config.input_fallback_to_default,
                             no_limiter: config.no_limiter,
                             wasapi_exclusive: config.wasapi_exclusive,
+                            source_type: config.source_type.clone(),
+                            loopback_device: config.loopback_device.clone(),
                             ..AudioRouterConfig::default()
                         };
                         match crate::config::save_config(&file_cfg, &path) {
@@ -362,6 +381,12 @@ impl eframe::App for AudioRouterApp {
                         } else {
                             self.devices.selected_output_devices.insert(name);
                         }
+                    }
+                    devices::DevicesPanelAction::SourceTypeChanged(source_type) => {
+                        self.devices.source_type = source_type;
+                    }
+                    devices::DevicesPanelAction::LoopbackDeviceSelected(name) => {
+                        self.devices.selected_loopback_device = name;
                     }
                     devices::DevicesPanelAction::None => {}
                 }

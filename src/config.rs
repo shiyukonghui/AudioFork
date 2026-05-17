@@ -38,6 +38,10 @@ pub struct AudioRouterConfig {
     pub no_limiter: bool,
     /// 是否启用 GUI 图形界面模式
     pub gui_enabled: bool,
+    /// 音频源类型，默认 "input"
+    pub source_type: String,
+    /// 回环设备名称，None 表示不使用回环
+    pub loopback_device: Option<String>,
 }
 
 impl Default for AudioRouterConfig {
@@ -62,6 +66,8 @@ impl Default for AudioRouterConfig {
             wasapi_exclusive: false,
             no_limiter: false,
             gui_enabled: false,
+            source_type: "input".to_string(),
+            loopback_device: None,
             // input_fallback_to_default 默认启用降级
             input_fallback_to_default: true,
         }

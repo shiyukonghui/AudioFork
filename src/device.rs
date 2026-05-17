@@ -313,3 +313,90 @@ pub fn select_output_devices(names: &[String]) -> Result<Vec<(cpal::Device, Devi
         Ok(result)
     }
 }
+
+/// 枚举系统中所有可用的回环（Loopback）设备
+///
+/// 回环设备用于捕获系统音频输出，通过枚举输出设备并过滤
+/// 不支持输出配置的设备来构建设备信息列表。
+pub fn enumerate_loopback_devices() -> Result<Vec<DeviceInfo>> {
+    let host = cpal::default_host();
+
+    let devices = host
+        .output_devices()
+        .map_err(|e| AudioRouterError::StreamError(format!("获取输出设备列表失败: {}", e)))?;
+
+    let mut result = Vec::new();
+
+    for device in devices {
+        let name = device
+            .name()
+            .unwrap_or_else(|_| "未知设备".to_string());
+
+        // 过滤掉不支持输出配置的设备
+        if device.supported_output_configs().is_err() {
+            continue;
+        }
+
+        let device_type = detect_device_type(&name);
+        let info = get_device_info(&device, device_type);
+        result.push(info);
+    }
+
+    Ok(result)
+}
+
+/// 选择回环（Loopback）设备
+///
+/// - 若 `name` 为 `None`，返回系统默认输出设备及其信息。
+/// - 若 `name` 为 `Some`，在所有输出设备中按名称模糊匹配
+///   （设备名包含指定字符串即可，不区分大小写）。
+/// - 找不到匹配设备则返回 `DeviceNotFound` 错误。
+pub fn select_loopback_device(name: Option<&str>) -> Result<(cpal::Device, DeviceInfo)> {
+    let host = cpal::default_host();
+
+    let devices = host
+        .output_devices()
+        .map_err(|e| AudioRouterError::StreamError(format!("获取输出设备列表失败: {}", e)))?;
+
+    // 收集所有支持输出的设备
+    let all_outputs: Vec<cpal::Device> = devices
+        .filter(|d| d.supported_output_configs().is_ok())
+        .collect();
+
+    match name {
+        None => {
+            // 未指定名称：返回系统默认输出设备
+            let default_device = host
+                .default_output_device()
+                .ok_or_else(|| AudioRouterError::DeviceNotFound("没有默认输出设备".to_string()))?;
+
+            let default_name = default_device
+                .name()
+                .unwrap_or_else(|_| "未知设备".to_string());
+            let device_type = detect_device_type(&default_name);
+            let info = get_device_info(&default_device, device_type);
+
+            Ok((default_device, info))
+        }
+        Some(query) => {
+            // 指定了名称：模糊匹配（不区分大小写）
+            let query_lower = query.to_lowercase();
+
+            for device in all_outputs {
+                let device_name = device
+                    .name()
+                    .unwrap_or_else(|_| String::new());
+                if device_name.to_lowercase().contains(&query_lower) {
+                    let device_type = detect_device_type(&device_name);
+                    let info = get_device_info(&device, device_type);
+                    return Ok((device, info));
+                }
+            }
+
+            Err(AudioRouterError::DeviceNotFound(format!(
+                "未找到匹配的回环设备: {}",
+                query
+            )))
+        }
+    }
+}

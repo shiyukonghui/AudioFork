@@ -78,6 +78,14 @@ pub struct CliArgs {
     #[arg(long = "config", default_value = "audio_router.toml")]
     pub config: Option<String>,
 
+    /// 音源类型: "input"（物理输入设备, 默认）或 "loopback"（系统音频回采）
+    #[arg(long = "source-type", default_value = "input")]
+    pub source_type: String,
+
+    /// Loopback 模式下的回采目标输出设备名称，不指定则使用系统默认输出设备
+    #[arg(long = "loopback-device")]
+    pub loopback_device: Option<String>,
+
     /// 预设配置文件路径，从指定 TOML 文件导入预设配置
     #[arg(long = "preset")]
     pub preset: Option<String>,
@@ -122,6 +130,10 @@ pub struct ResolvedConfig {
     pub gui: bool,
     /// 配置文件路径，None 表示未指定
     pub config_path: Option<String>,
+    /// 音源类型
+    pub source_type: String,
+    /// Loopback 回采设备
+    pub loopback_device: Option<String>,
     /// 预设配置路径，None 表示未导入预设
     pub preset_path: Option<String>,
 }
@@ -241,6 +253,23 @@ impl CliArgs {
             // 配置文件路径：CLI 优先
             config_path: self.config.clone(),
 
+            // 音源类型：CLI 提供非默认值则用 CLI，否则用配置文件
+            source_type: if self.source_type != "input" || config.source_type != "input" {
+                if self.source_type != "input" {
+                    self.source_type.clone()
+                } else {
+                    config.source_type.clone()
+                }
+            } else {
+                "input".to_string()
+            },
+
+            // Loopback 设备：CLI 优先，否则用配置文件
+            loopback_device: self
+                .loopback_device
+                .clone()
+                .or_else(|| config.loopback_device.clone()),
+
             // 预设配置路径：CLI 优先
             preset_path: self.preset.clone(),
         }
@@ -286,6 +315,12 @@ impl CliArgs {
         if self.preset.is_some() {
             tracing::warn!("GUI 模式下 --preset 参数被忽略，请通过配置文件或 GUI 界面设置");
         }
+        if self.source_type != "input" {
+            tracing::warn!("GUI 模式下 --source-type 参数被忽略，请通过配置文件或 GUI 界面设置");
+        }
+        if self.loopback_device.is_some() {
+            tracing::warn!("GUI 模式下 --loopback-device 参数被忽略，请通过配置文件或 GUI 界面设置");
+        }
 
         // 对于 bool 标志：仅当被用户显式设置为 true 时才告警
         if self.no_drift_compensation {
@@ -323,6 +358,8 @@ impl CliArgs {
             no_limiter: false,
             gui: self.gui,
             config: self.config.clone(),
+            source_type: "input".to_string(),
+            loopback_device: None,
             preset: None,
         }
     }
