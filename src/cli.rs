@@ -145,7 +145,7 @@ impl CliArgs {
     ///
     /// 当用户通过命令行传入了与音频处理相关的参数时返回 true，
     /// 这些参数表明用户意图以 CLI 模式运行而非 GUI 模式。
-    fn has_operational_args(&self) -> bool {
+    pub fn has_operational_args(&self) -> bool {
         self.input_device.is_some()
             || !self.output_device.is_empty()
             || self.sample_rate.is_some()

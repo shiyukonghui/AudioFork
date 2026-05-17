@@ -73,19 +73,54 @@ struct OutputSlot {
 }
 
 fn main() {
+    // 解析命令行参数（在 main 开头解析，用于判断是否需要隐藏控制台）
+    let cli_args = cli::CliArgs::parse();
+
+    // Windows 平台：GUI 模式下隐藏控制台窗口
+    // 条件：用户显式指定 --gui，或者没有传入任何操作参数（默认启动 GUI）
+    #[cfg(windows)]
+    {
+        let should_hide_console = cli_args.gui || !cli_args.has_operational_args();
+        if should_hide_console {
+            // 调用 Windows API 释放控制台，隐藏命令行窗口
+            unsafe {
+                let _ = windows::Win32::System::Console::FreeConsole();
+            }
+        }
+    }
+
     // 使用闭包包装主逻辑，方便统一错误处理和日志输出
-    if let Err(e) = run() {
-        tracing::error!("致命错误，程序退出: {}", e);
+    if let Err(e) = run(cli_args) {
+        // GUI 模式下错误通过对话框显示（控制台已隐藏）
+        #[cfg(windows)]
+        {
+            // 重新判断是否为 GUI 模式（避免重复解析）
+            let is_gui_mode = std::env::args().any(|a| a == "--gui") 
+                || !std::env::args().any(|a| a.starts_with("--") && a != "--gui" && a != "--config");
+            if is_gui_mode {
+                rfd::MessageDialog::new()
+                    .set_title("音频路由器 - 错误")
+                    .set_description(&format!("程序启动失败: {}", e))
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            } else {
+                tracing::error!("致命错误，程序退出: {}", e);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            tracing::error!("致命错误，程序退出: {}", e);
+        }
         std::process::exit(1);
     }
 }
 
 /// Phase 2 主流程入口，返回 Result 便于上层错误处理
-fn run() -> Result<()> {
+fn run(cli_args: cli::CliArgs) -> Result<()> {
     // ========================================================================
-    // 1. 解析命令行参数
+    // 1. 解析命令行参数（已在 main() 中解析，此处直接使用）
     // ========================================================================
-    let cli_args = cli::CliArgs::parse();
+    // cli_args 已在 main() 中解析并传入
 
     // ========================================================================
     // 2. 初始化日志系统

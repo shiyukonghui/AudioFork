@@ -21,6 +21,9 @@ rfd = "0.15"
 sysinfo = "0.33"
 wasapi = { version = "0.22", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_Console"] }
+
 [features]
 default = []
 wasapi-exclusive = ["dep:wasapi"]

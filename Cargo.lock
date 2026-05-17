@@ -549,6 +549,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "wasapi",
+ "windows 0.58.0",
 ]
 
 [[package]]

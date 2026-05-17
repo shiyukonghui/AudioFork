@@ -58,15 +58,15 @@ impl StatusBarState {
         self.output_statuses = statuses;
     }
 
-    /// 在 egui 上下文中渲染底部状态栏面板
+    /// 在 egui 上下文中渲染底部状态栏面板（简化版）
     ///
     /// 渲染内容包括：
     /// - 引擎状态指示器（彩色圆点 + 文本）
     /// - 输出设备诊断信息（运行时显示）
-    /// - 系统资源使用情况（可选）
     ///
     /// # 参数
     /// * `ui` - egui 的 Ui 引用，用于布局和渲染
+    #[allow(dead_code)]
     pub fn show(&mut self, ui: &mut egui::Ui) {
         // 使用 Frame::group 包裹整体，背景色区别于主编辑区
         egui::Frame::group(ui.style())
@@ -87,6 +87,13 @@ impl StatusBarState {
                                 egui::Color32::GREEN,
                                 "🟢 引擎运行中",
                             );
+                            // 显示输出设备数量
+                            if !self.output_statuses.is_empty() {
+                                ui.label(format!(
+                                    " | {} 个输出设备",
+                                    self.output_statuses.len()
+                                ));
+                            }
                         }
                         EngineStatus::Error(msg) => {
                             // 红色圆点 + 错误信息
@@ -97,36 +104,6 @@ impl StatusBarState {
                         }
                     }
                 });
-
-                // ---------- 输出设备状态（仅引擎运行时且有输出设备时显示）----------
-                if self.engine_status == EngineStatus::Running && !self.output_statuses.is_empty() {
-                    ui.separator();
-
-                    for snap in &self.output_statuses {
-                        // 每个输出设备一个紧凑卡片
-                        ui.horizontal(|ui| {
-                            // 设备名（粗体）
-                            ui.strong(&snap.device_name);
-                            // 诊断数据行
-                            ui.label(format!(
-                                "欠载:{} 溢出:{} 延迟:{:.1}ms delta:{:+} 水位:{:.0}%",
-                                snap.underrun_count,
-                                snap.overflow_count,
-                                snap.latency_ms,
-                                snap.delta,
-                                snap.water_level_pct,
-                            ));
-                        });
-                    }
-                }
-
-                // ---------- 系统资源使用情况（可选显示）----------
-                if self.show_system_usage {
-                    ui.label(format!(
-                        "CPU: {:.1}% | 内存: {:.1}MB",
-                        self.cpu_usage, self.memory_mb,
-                    ));
-                }
             });
     }
 }
